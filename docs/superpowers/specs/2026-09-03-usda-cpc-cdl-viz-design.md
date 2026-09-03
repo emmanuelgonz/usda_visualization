@@ -85,8 +85,9 @@ Both paths skip any target already present at the expected size, making re-runs 
 ### 6.1 Catalog
 
 `catalog.json` records the crops, variables, and the weeks available per crop, variable, and year;
-the CDL years present; the CDL code-to-class-name map read from the raster attribute table; the
-crop code sets in Section 6.2; and the CPC-year to CDL-year pairing in Section 6.3.
+the CDL years present; the CDL years that have a complete set of crop masks; the CDL
+code-to-class-name map read from the raster attribute table; the crop code sets in Section 6.2;
+and the CPC-year to CDL-year pairing in Section 6.3.
 
 ### 6.2 Crop code sets
 
@@ -123,9 +124,20 @@ set within each 9 km cell.
 
 Forcing `overviewLevel='NONE'` is deliberate. The `.ovr` pyramid was built for a thematic raster,
 so averaging a class indicator sampled from an overview would not give a true areal fraction.
-Reading full resolution costs one complete pass over each 2.6 GB CDL year, estimated at 15–40
-minutes per year and roughly 1–3 hours for all four. Bundling all eight bands into one warp
-reduces this from sixteen full-resolution passes to four.
+Reading full resolution costs one complete pass over each 2.6 GB CDL year. Bundling all eight
+bands into one warp reduces this from sixteen full-resolution passes to four.
+
+A measured probe on 2024 warped a 19226 × 12065 subwindow, one sixty-fourth of the raster, across
+all eight bands in 134.8 s reading through `/vsizip`, which projects to roughly 144 minutes per
+year and about 10 hours for four. Reading extracted files rather than decompressing the zip on
+every access will cut this substantially, by how much is unmeasured. The mask build is therefore
+the one genuinely slow step, and it runs one year at a time so the real rate is measured on the
+first year before any further year is committed to.
+
+Masks are consequently scoped to CDL 2024 and 2025. All four CDL years are extracted and serve as
+base layers; 2022 and 2023 simply have no mask, and the catalog's `mask_years` key records which
+years do, so the interface disables the mask control for the rest. Adding those two years later
+means running the preparation step with `--year 2022 --year 2023` and requires no code change.
 
 The canonical grid is the maximum CPC extent: 508 × 320, origin (−2309800.2134, 3185470.2868),
 pixel size 8999.2555 × −8995.4865. Masks and CPC rasters are never aligned to each other in pixel
@@ -193,7 +205,8 @@ mode, and crop masking.
 Overlay and swipe are exclusive view modes. Overlay draws the CPC layer semi-transparently on the
 CDL base; swipe is implemented client-side as two Leaflet panes with a draggable clip divider,
 requiring no server work. Crop masking per Section 7.3 is an independent toggle that composes with
-either mode, giving four valid combinations. Click-to-inspect is not a mode but an always-live
+either mode, giving four valid combinations, and is disabled for any CDL year absent from
+`mask_years`. Click-to-inspect is not a mode but an always-live
 interaction: clicking anywhere opens a panel showing the CDL class name, the crop-cover split into
 primary and double-crop fractions, and an inline SVG sparkline of the weekly condition and progress
 series at the clicked cell.
