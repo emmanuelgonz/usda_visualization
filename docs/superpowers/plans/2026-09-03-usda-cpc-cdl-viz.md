@@ -62,11 +62,13 @@ Tasks 1, 3, and 4 have no GDAL I/O and are pure-function modules, so they are fa
 **Interfaces:**
 - Consumes: nothing
 - Produces:
-  - `paths.ROOT: Path`, `paths.CPC_ARCHIVES: Path`, `paths.CDL_ARCHIVES: Path`, `paths.DATA: Path`, `paths.CPC_DATA: Path`, `paths.CDL_DATA: Path`, `paths.MASK_DATA: Path`, `paths.CATALOG: Path`, `paths.CACHE: Path`, `paths.WEB: Path`
+  - `paths.ROOT: Path`, `paths.CPC_ARCHIVES: Path`, `paths.CDL_ARCHIVES: Path`, `paths.DATA: Path`, `paths.CPC_DATA: Path`, `paths.CDL_DATA: Path`, `paths.MASK_DATA: Path`, `paths.CATALOG: Path`, `paths.CACHE: Path`, `paths.TILE_CACHE: Path`, `paths.WEB: Path`
   - `naming.CROPS: tuple[str, ...]` = `("corn", "cotton", "soy", "wheat")`
   - `naming.VARS: tuple[str, ...]` = `("cond", "prog")`
+  - `naming.VAR_LABELS: dict[str, str]` = `{"cond": "Condition", "prog": "Progress"}` (read by Task 6's catalog and shown in Task 8's variable selector)
   - `naming.CROP_CODES: dict[str, dict[str, tuple[int, ...]]]`
   - `naming.parse_cpc_filename(name: str) -> dict | None` returning keys `crop`, `var`, `year`, `week`
+  - `naming.cpc_filename(crop: str, var: str, year: int, week: int) -> str`
   - `naming.cpc_relpath(crop: str, var: str, year: int, week: int) -> str`
   - `naming.pair_cdl_year(cpc_year: int, cdl_years: Sequence[int]) -> int`
 
@@ -555,7 +557,9 @@ case "${1:-serve}" in
   extract) shift; exec python3 -m viz.extract "$@" ;;
   prepare) shift; exec python3 -m viz.prepare "$@" ;;
   serve)   shift; exec python3 -m viz.tileserver "$@" ;;
-  test)    shift; exec python3 -m unittest discover -s tests -v "$@" ;;
+  # -t . keeps the repo root as the top-level import dir so `from viz import ...`
+  # and `from tests import fixtures` both resolve.
+  test)    shift; exec python3 -m unittest discover -s tests -t . -v "$@" ;;
   *) echo "usage: $0 {extract|prepare|serve|test} [args]" >&2; exit 2 ;;
 esac
 ```
@@ -868,7 +872,7 @@ class TestColorizeContinuous(unittest.TestCase):
         alpha = np.array([[0.0, 0.5, 1.0]], dtype=np.float32)
         out = color.colorize_continuous(values, "cond", alpha=alpha)
         self.assertEqual(int(out[0, 0, 3]), 0)
-        self.assertEqual(int(out[0, 1, 3]), 127)
+        self.assertEqual(int(out[0, 1, 3]), 128)  # 255 * 0.5 = 127.5, NumPy rounds half to even
         self.assertEqual(int(out[0, 2, 3]), 0)
 
     def test_progress_domain_is_zero_to_one(self):
@@ -1098,6 +1102,7 @@ git commit -m "Add fixed-domain color ramps and CDL palette lookup tables"
   - `rasters.lonlat_to_5070(lon: float, lat: float) -> tuple[float, float]`
   - `rasters.encode_png(rgba: np.ndarray) -> bytes`
   - `rasters.read_rat(path: str) -> dict[int, str]` mapping CDL code to class name
+  - `rasters.write_multiband_float(path, data: np.ndarray, grid: dict) -> path` — writes a `(bands, rows, cols)` array onto a grid definition; Task 6 uses it for the masks
 
 GDAL `Dataset` objects are not safe for concurrent access, so the cache lives in `threading.local()` and each worker thread opens its own handle. Warping uses `overviewLevel="AUTO"` so GDAL reads the appropriate `.ovr` pyramid level, which is what keeps a 153811 × 96523 raster responsive at national zoom.
 
@@ -1148,8 +1153,15 @@ def write_cpc_like(path, width=40, height=30, fill=3.0, nodata=-9999.0, border_n
     return path
 
 
-def write_cdl_like(path, width=40, height=30, code=1, pixel=30.0):
-    """A paletted Byte EPSG:5070 raster carrying a color table and an attribute table."""
+def write_cdl_like(path, width=40, height=30, code=1, pixel=300.0):
+    """A paletted Byte EPSG:5070 raster carrying a color table and an attribute table.
+
+    The default 300 m pixel is not the CDL's real 30 m. At 30 m a 40 x 30 fixture
+    spans 1.2 x 0.9 km, which is sub-pixel inside a 313 km zoom-7 tile and would
+    make every warp test pass vacuously against empty space. 300 m spans
+    12 x 9 km, and the larger fixtures used by the mask tests then cover enough
+    9 km CPC cells to produce meaningful fractions.
+    """
     driver = gdal.GetDriverByName("GTiff")
     ds = driver.Create(str(path), width, height, 1, gdal.GDT_Byte)
     ds.SetGeoTransform(
@@ -1180,9 +1192,39 @@ def write_cdl_like(path, width=40, height=30, code=1, pixel=30.0):
     return path
 
 
-def tile_covering(path):
-    """A (z, x, y) tile whose extent overlaps the fixture, for warp tests."""
-    return (7, 30, 47)
+def fixture_lonlat(path):
+    """WGS84 longitude and latitude of a fixture raster's centre."""
+    ds = gdal.Open(str(path))
+    gt = ds.GetGeoTransform()
+    x = gt[0] + gt[1] * ds.RasterXSize / 2.0
+    y = gt[3] + gt[5] * ds.RasterYSize / 2.0
+
+    source = osr.SpatialReference()
+    source.ImportFromEPSG(5070)
+    source.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+    target = osr.SpatialReference()
+    target.ImportFromEPSG(4326)
+    target.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+    lon, lat, _ = osr.CoordinateTransformation(source, target).TransformPoint(x, y)
+    return (lon, lat)
+
+
+def tile_covering(path, zoom=9):
+    """The (z, x, y) tile containing a fixture's centre.
+
+    Computed from the raster's own geotransform rather than hardcoded: the
+    fixtures sit at the canonical CPC grid origin, which is 127.35 W 48.20 N,
+    not anywhere in the Corn Belt.
+    """
+    lon, lat = fixture_lonlat(path)
+    x, y = gridmath.lonlat_to_tile(lon, lat, zoom)
+    return (zoom, x, y)
+
+
+def tile_far_from(path, zoom=9):
+    """A tile at the same zoom that cannot overlap the fixture."""
+    _, x, y = tile_covering(path, zoom)
+    return (zoom, (x + 2 ** zoom // 2) % (2 ** zoom), y)
 ```
 
 Create `tests/test_rasters.py`:
@@ -1258,8 +1300,15 @@ class TestWarpTile(unittest.TestCase):
                                 dtype="float32")
         self.assertEqual(out.shape, (2, gridmath.TILE_SIZE, gridmath.TILE_SIZE))
 
+    def test_thematic_warp_actually_reads_the_fixture(self):
+        # Guards against a tile that misses the data and passes vacuously.
+        z, x, y = fixtures.tile_covering(self.cdl)
+        out = rasters.warp_tile(self.cdl, z, x, y, resample="near")
+        self.assertGreater(int((out == 1).sum()), 0)
+
     def test_tile_far_from_the_data_is_all_nodata(self):
-        out = rasters.warp_tile(self.cdl, 7, 5, 5, resample="near")
+        z, x, y = fixtures.tile_far_from(self.cdl)
+        out = rasters.warp_tile(self.cdl, z, x, y, resample="near")
         self.assertTrue((out == 0).all())
 
 
@@ -1653,7 +1702,9 @@ class TestBuildMask(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.tmp)
-        # 600x600 at 30 m spans two 9 km cells across, half of it corn.
+        # 600 x 600 at the fixture's 300 m pixel spans 180 x 180 km, about 20 x 20
+        # cells of the 9 km CPC grid, with the right half corn. Large enough that
+        # interior cells reach a fraction near 1.0 rather than only edge effects.
         self.src = str(fixtures.write_cdl_like(self.tmp / "cdl.tif", width=600, height=600, code=1))
 
     def test_writes_two_bands(self):
@@ -2136,10 +2187,21 @@ class ServerTestCase(unittest.TestCase):
         paths.CATALOG.write_text(json.dumps(
             prepare.build_catalog(paths.CPC_DATA, paths.CDL_DATA, paths.MASK_DATA)))
 
+        # Tiles are computed from the fixtures' own geotransform. The fixtures sit
+        # at the canonical CPC grid origin (127.35 W 48.20 N), not the Corn Belt,
+        # so a hardcoded tile would miss them and every assertion would pass on
+        # empty space.
+        cls.z, cls.x, cls.y = fixtures.tile_covering(paths.CDL_DATA / "2024_30m_cdls.tif")
+        cls.lon, cls.lat = fixtures.fixture_lonlat(paths.CDL_DATA / "2024_30m_cdls.tif")
+
         cls.server = tileserver.make_server(0)
         cls.port = cls.server.server_address[1]
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
+
+    @classmethod
+    def zxy(cls):
+        return f"{cls.z}/{cls.x}/{cls.y}.png"
 
     @classmethod
     def tearDownClass(cls):
@@ -2182,40 +2244,42 @@ class TestStaticRoutes(ServerTestCase):
 
 class TestTileRoutes(ServerTestCase):
     def test_cdl_tile_is_a_256_square_png(self):
-        status, ctype, body = self.get("/tiles/cdl/2024/7/30/47.png")
+        status, ctype, body = self.get("/tiles/cdl/2024/" + self.zxy())
         self.assertEqual(status, 200)
         self.assertEqual(ctype, "image/png")
         self.assertTrue(body.startswith(b"\x89PNG\r\n\x1a\n"))
         self.assertEqual(_png_size(body), (256, 256))
 
     def test_cpc_tile_is_a_256_square_png(self):
-        status, _, body = self.get("/tiles/cpc/corn/cond/2024/30/7/30/47.png")
+        status, _, body = self.get("/tiles/cpc/corn/cond/2024/30/" + self.zxy())
         self.assertEqual(status, 200)
         self.assertEqual(_png_size(body), (256, 256))
 
     def test_masked_cpc_tile_renders(self):
-        status, _, body = self.get("/tiles/cpc/corn/cond/2024/30/7/30/47.png?mask=2024")
+        status, _, body = self.get("/tiles/cpc/corn/cond/2024/30/" + self.zxy() + "?mask=2024")
         self.assertEqual(status, 200)
         self.assertEqual(_png_size(body), (256, 256))
 
     def test_masked_and_unmasked_tiles_differ(self):
-        _, _, plain = self.get("/tiles/cpc/corn/cond/2024/30/7/30/47.png")
-        _, _, masked = self.get("/tiles/cpc/corn/cond/2024/30/7/30/47.png?mask=2024")
+        # Both tiles cover real fixture data, so a difference here means the
+        # mask actually modulated alpha rather than both being empty.
+        _, _, plain = self.get("/tiles/cpc/corn/cond/2024/30/" + self.zxy())
+        _, _, masked = self.get("/tiles/cpc/corn/cond/2024/30/" + self.zxy() + "?mask=2024")
         self.assertNotEqual(plain, masked)
 
     def test_second_request_is_served_from_the_disk_cache(self):
-        self.get("/tiles/cdl/2024/8/61/94.png")
-        cached = tileserver.cache_path("cdl-2024", 8, 61, 94)
+        self.get("/tiles/cdl/2024/" + self.zxy())
+        cached = tileserver.cache_path("cdl-2024", self.z, self.x, self.y)
         self.assertTrue(cached.is_file())
 
     def test_missing_cpc_week_returns_404(self):
         with self.assertRaises(urllib.error.HTTPError) as ctx:
-            self.get("/tiles/cpc/corn/cond/2024/99/7/30/47.png")
+            self.get("/tiles/cpc/corn/cond/2024/99/" + self.zxy())
         self.assertEqual(ctx.exception.code, 404)
 
     def test_missing_cdl_year_returns_404(self):
         with self.assertRaises(urllib.error.HTTPError) as ctx:
-            self.get("/tiles/cdl/1999/7/30/47.png")
+            self.get("/tiles/cdl/1999/" + self.zxy())
         self.assertEqual(ctx.exception.code, 404)
 
     def test_malformed_tile_coordinates_return_400(self):
@@ -2225,9 +2289,12 @@ class TestTileRoutes(ServerTestCase):
 
 
 class TestPointRoute(ServerTestCase):
+    def point_url(self):
+        return (f"/api/point?lon={self.lon:.6f}&lat={self.lat:.6f}"
+                "&crop=corn&year=2024&cdl_year=2024")
+
     def test_reports_cdl_class_and_crop_cover(self):
-        status, ctype, body = self.get(
-            "/api/point?lon=-93.62&lat=42.03&crop=corn&year=2024&cdl_year=2024")
+        status, ctype, body = self.get(self.point_url())
         self.assertEqual(status, 200)
         self.assertIn("application/json", ctype)
         report = json.loads(body)
@@ -2236,12 +2303,21 @@ class TestPointRoute(ServerTestCase):
         self.assertIn("primary", report["cover"])
         self.assertIn("double", report["cover"])
 
+    def test_resolves_a_real_class_name_inside_the_fixture(self):
+        # The point is the fixture's own centre, so this must hit real data.
+        report = json.loads(self.get(self.point_url())[2])
+        self.assertIn(report["cdl_class"], ("Background", "Corn"))
+        self.assertIsNotNone(report["cdl_code"])
+
     def test_series_carries_both_variables_keyed_by_week(self):
-        _, _, body = self.get(
-            "/api/point?lon=-93.62&lat=42.03&crop=corn&year=2024&cdl_year=2024")
+        _, _, body = self.get(self.point_url())
         series = json.loads(body)["series"]
         self.assertIn("cond", series)
         self.assertIn("prog", series)
+
+    def test_series_returns_the_week_present_in_the_fixture(self):
+        series = json.loads(self.get(self.point_url())[2])["series"]
+        self.assertEqual([p["week"] for p in series["cond"]], [30])
 
     def test_missing_parameters_return_400(self):
         with self.assertRaises(urllib.error.HTTPError) as ctx:
