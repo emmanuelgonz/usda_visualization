@@ -1,0 +1,18 @@
+# Source archives (~37 GB) — kept in place, never tracked
+usda_crop_progress_and_condition_gridded_layers/
+usda_cropland_data_layer/
+
+# Extracted rasters and precomputed masks (~11 GB)
+data/
+
+# Rendered tile cache
+cache/
+
+# Vendored browser libraries, fetched by the setup step
+viz/web/vendor/
+
+# Session history
+.remember/
+
+__pycache__/
+*.pyc
