@@ -602,14 +602,14 @@ Run: `cd /mnt/c/Users/emgonz38/Downloads/usda && ./run.sh extract --cpc-only`
 Expected: 12 lines reporting roughly 250 rasters per year. Then verify:
 
 ```bash
-find data/cpc -name '*.tif' | wc -l      # expect ~3000
+find data/cpc -name '*.tif' | wc -l      # expect exactly 2909
 ls data/cpc                              # expect: corn cotton soy wheat
-du -sh data/cpc                          # expect roughly 1 GB
+du -sh data/cpc                          # expect roughly 501 MB
 ```
 
 - [ ] **Step 6: Run the real CDL extraction**
 
-This writes about 10 GB and takes several minutes per year. Run it in the background and watch the log:
+This writes about 21 GB and takes several minutes per year. Run it in the background and watch the log:
 
 ```bash
 cd /mnt/c/Users/emgonz38/Downloads/usda && ./run.sh extract --cdl-only > /tmp/cdl_extract.log 2>&1 &
@@ -619,7 +619,7 @@ Expected on completion:
 
 ```bash
 ls -la data/cdl                          # expect 4 years x 4 files
-du -sh data/cdl                          # expect roughly 10 GB
+du -sh data/cdl                          # expect roughly 21 GB
 ```
 
 - [ ] **Step 7: Commit**
