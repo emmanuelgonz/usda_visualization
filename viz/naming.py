@@ -19,8 +19,12 @@ CROP_CODES = {
     "wheat": {"primary": (22, 23, 24), "double": (26, 225, 238)},
 }
 
+# The crop prefix is matched case-insensitively on purpose. USDA changed the
+# convention partway through the archive: 2015-2020 name corn and soy files
+# CornCond24w15.tif and SoyCond24w15.tif, while 2021 onward use cornCond24w15.tif.
+# A lowercase-only pattern silently drops 590 rasters across those six years.
 _CPC_RE = re.compile(
-    r"^(?P<crop>[a-z]+)(?P<var>Cond|Prog)(?P<yy>\d{2})w(?P<ww>\d{1,2})\.tif$"
+    r"^(?P<crop>[A-Za-z]+)(?P<var>Cond|Prog)(?P<yy>\d{2})w(?P<ww>\d{1,2})\.tif$"
 )
 
 
@@ -29,7 +33,7 @@ def parse_cpc_filename(name):
     match = _CPC_RE.match(name)
     if match is None:
         return None
-    crop = match.group("crop")
+    crop = match.group("crop").lower()
     if crop not in CROPS:
         return None
     return {
