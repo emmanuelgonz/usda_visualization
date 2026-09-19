@@ -1719,7 +1719,10 @@ class TestBuildLutVrt(unittest.TestCase):
 
     def test_lut_maps_member_codes_to_one_and_others_to_zero(self):
         ds = gdal.Open(prepare.build_lut_vrt(self.src, [(1,)]))
-        raw = gdal.Open(self.src).GetRasterBand(1).ReadAsArray()
+        # Hold the Dataset in a name: a GDAL Band keeps only a weak reference to
+        # its parent, so the chained form is garbage-collected mid-expression.
+        src_ds = gdal.Open(self.src)
+        raw = src_ds.GetRasterBand(1).ReadAsArray()
         lutted = ds.GetRasterBand(1).ReadAsArray()
         np.testing.assert_array_equal(lutted, (raw == 1).astype(np.uint8))
 
