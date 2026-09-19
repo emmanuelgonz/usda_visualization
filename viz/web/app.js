@@ -62,7 +62,8 @@
   }
 
   function drawCpc() {
-    if (cpcLayer) { map.removeLayer(cpcLayer); }
+    if (cpcLayer) { map.removeLayer(cpcLayer); cpcLayer = null; }
+    if (state.week === null || state.week === undefined) { return; }
     var url = "/tiles/cpc/" + state.crop + "/" + state.var + "/" + state.year +
               "/" + state.week + "/{z}/{x}/{y}.png" +
               (state.mask ? "?mask=" + state.cdlYear : "");
@@ -178,7 +179,9 @@
 
   function showReadout(report) {
     var cover = report.cover || {};
-    var total = (cover.primary || 0) + (cover.double || 0);
+    var noCover = (cover.primary === null || cover.primary === undefined) &&
+                  (cover.double === null || cover.double === undefined);
+    var total = noCover ? null : (cover.primary || 0) + (cover.double || 0);
     var html =
       "<h2>" + (report.cdl_class || "Unknown") + "</h2>" +
       "<table>" +
@@ -199,7 +202,7 @@
     drawCpc();
     drawLegend();
     drawPairing();
-    el("weekOut").textContent = "w" + pad(state.week);
+    el("weekOut").textContent = state.week === null ? "no weeks" : "w" + pad(state.week);
   }
 
   function syncWeekSlider() {
@@ -208,11 +211,15 @@
     slider.min = 0;
     slider.max = Math.max(0, weeks.length - 1);
     var index = weeks.indexOf(state.week);
-    if (index < 0) {
-      index = Math.min(weeks.length - 1, Math.floor(weeks.length / 2));
+    if (index < 0 && weeks.length) {
+      index = Math.floor(weeks.length / 2);
       state.week = weeks[index];
     }
-    slider.value = index;
+    // An empty week list must not index weeks[-1] and leave state.week undefined,
+    // which would request /undefined/ tiles and print "wundefined".
+    if (!weeks.length) { state.week = null; }
+    slider.disabled = !weeks.length;
+    slider.value = Math.max(0, index);
     slider.dataset.weeks = JSON.stringify(weeks);
   }
 
