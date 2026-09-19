@@ -1,1 +1,62 @@
-<html><body>placeholder</body></html>
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>USDA Crop Progress and Condition over the Cropland Data Layer</title>
+<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div id="map"></div>
+
+<aside id="panel">
+  <h1>CPC over CDL</h1>
+
+  <section class="controls">
+    <label>Crop
+      <select id="crop"></select>
+    </label>
+    <label>Variable
+      <select id="var"></select>
+    </label>
+    <label>CPC year
+      <select id="year"></select>
+    </label>
+    <label>CDL year
+      <select id="cdlYear"></select>
+    </label>
+  </section>
+
+  <section class="controls">
+    <label>Week <output id="weekOut"></output>
+      <input type="range" id="week" min="0" max="0" step="1">
+    </label>
+    <div class="row">
+      <button id="play" type="button">Play</button>
+      <button id="prev" type="button">&larr;</button>
+      <button id="next" type="button">&rarr;</button>
+    </div>
+  </section>
+
+  <section class="controls">
+    <fieldset>
+      <legend>View</legend>
+      <label class="inline"><input type="radio" name="mode" value="overlay" checked> Overlay</label>
+      <label class="inline"><input type="radio" name="mode" value="swipe"> Swipe</label>
+    </fieldset>
+    <label class="inline"><input type="checkbox" id="mask"> Mask to crop extent</label>
+    <label>Opacity <output id="opacityOut">70%</output>
+      <input type="range" id="opacity" min="0" max="100" step="5" value="70">
+    </label>
+  </section>
+
+  <section id="legend"></section>
+  <p id="pairing" class="note"></p>
+  <section id="readout"><p class="note">Click the map to inspect a cell.</p></section>
+</aside>
+
+<script src="/static/vendor/leaflet/leaflet.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

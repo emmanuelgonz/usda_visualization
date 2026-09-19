@@ -205,5 +205,39 @@ class TestPointRoute(ServerTestCase):
         self.assertEqual(ctx.exception.code, 400)
 
 
+class TestInterfaceAssets(ServerTestCase):
+    def test_index_loads_vendored_leaflet_not_a_cdn(self):
+        _, _, body = self.get("/")
+        text = body.decode()
+        self.assertIn("/static/vendor/leaflet/leaflet.js", text)
+        self.assertIn("/static/vendor/leaflet/leaflet.css", text)
+        self.assertNotIn("://unpkg.com", text)
+        self.assertNotIn("://cdn", text)
+
+    def test_index_references_app_and_style(self):
+        _, _, body = self.get("/")
+        text = body.decode()
+        self.assertIn("/static/app.js", text)
+        self.assertIn("/static/style.css", text)
+
+    def test_static_assets_are_served(self):
+        for route, expected in (
+            ("/static/app.js", "text/javascript"),
+            ("/static/style.css", "text/css"),
+            ("/static/vendor/leaflet/leaflet.js", "text/javascript"),
+            ("/static/vendor/leaflet/leaflet.css", "text/css"),
+        ):
+            with self.subTest(route=route):
+                status, ctype, body = self.get(route)
+                self.assertEqual(status, 200)
+                self.assertIn(expected, ctype)
+                self.assertGreater(len(body), 0)
+
+    def test_static_route_refuses_directory_traversal(self):
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.get("/static/../../viz/tileserver.py")
+        self.assertIn(ctx.exception.code, (400, 403, 404))
+
+
 if __name__ == "__main__":
     unittest.main()
