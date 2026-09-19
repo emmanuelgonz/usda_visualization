@@ -7,12 +7,11 @@ import sys
 import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import numpy as np
 
-from viz import color, gridmath, naming, paths, rasters
+from viz import color, naming, paths, rasters
 
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -149,6 +148,7 @@ def point_report(lon, lat, crop, year, cdl_year):
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "usda-viz/1.0"
+    protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt, *args):  # quieter than the default one line per tile
         pass
@@ -242,10 +242,15 @@ class Handler(BaseHTTPRequestHandler):
         required = ("lon", "lat", "crop", "year", "cdl_year")
         if any(key not in query for key in required):
             return self._fail(HTTPStatus.BAD_REQUEST, f"required: {', '.join(required)}")
-        report = point_report(
-            float(query["lon"][0]), float(query["lat"][0]), query["crop"][0],
-            int(query["year"][0]), int(query["cdl_year"][0]),
-        )
+        try:
+            lon = float(query["lon"][0])
+            lat = float(query["lat"][0])
+            year = int(query["year"][0])
+            cdl_year = int(query["cdl_year"][0])
+        except ValueError:
+            return self._fail(HTTPStatus.BAD_REQUEST,
+                               "lon, lat, year, cdl_year must be numeric")
+        report = point_report(lon, lat, query["crop"][0], year, cdl_year)
         self._send(json.dumps(report).encode(), CONTENT_TYPES[".json"])
 
 

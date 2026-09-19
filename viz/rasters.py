@@ -1,5 +1,6 @@
 """GDAL access: thread-local dataset caching, tile warping, and point sampling."""
 
+import math
 import threading
 
 import numpy as np
@@ -39,6 +40,8 @@ def open_cached(path):
 def warp_tile(path, z, x, y, resample="near", bands=None, dtype=None):
     """Warp one XYZ tile out of a raster into a 256x256 Web Mercator array."""
     src = open_cached(path)
+    if bands is None and src.RasterCount > 1:
+        raise ValueError(f"{path} has {src.RasterCount} bands; pass bands= explicitly")
     options = {
         "format": "MEM",
         "dstSRS": "EPSG:3857",
@@ -86,8 +89,8 @@ def sample_point(path, x5070, y5070, bands=None):
     """Read one pixel by projected coordinate. Returns None per band when outside."""
     ds = open_cached(path)
     gt = ds.GetGeoTransform()
-    col = int((x5070 - gt[0]) / gt[1])
-    row = int((y5070 - gt[3]) / gt[5])
+    col = math.floor((x5070 - gt[0]) / gt[1])
+    row = math.floor((y5070 - gt[3]) / gt[5])
     indices = list(bands) if bands is not None else [1]
     if not (0 <= col < ds.RasterXSize and 0 <= row < ds.RasterYSize):
         return [None] * len(indices)
@@ -104,21 +107,22 @@ def sample_point(path, x5070, y5070, bands=None):
     return values
 
 
-_transform = None
-
-
 def lonlat_to_5070(lon, lat):
-    """Transform WGS84 longitude and latitude to NAD83 / Conus Albers."""
-    global _transform
-    if _transform is None:
+    """Transform WGS84 longitude and latitude to NAD83 / Conus Albers.
+
+    OGRCoordinateTransformation is not thread-safe, so the transform is built
+    once per thread and cached on the same thread-local used for datasets.
+    """
+    transform = getattr(_local, "to_5070", None)
+    if transform is None:
         source = osr.SpatialReference()
         source.ImportFromEPSG(4326)
         source.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
         target = osr.SpatialReference()
         target.ImportFromEPSG(5070)
         target.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
-        _transform = osr.CoordinateTransformation(source, target)
-    x, y, _ = _transform.TransformPoint(float(lon), float(lat))
+        transform = _local.to_5070 = osr.CoordinateTransformation(source, target)
+    x, y, _ = transform.TransformPoint(float(lon), float(lat))
     return (x, y)
 
 
@@ -131,14 +135,16 @@ def encode_png(rgba):
 
     name = f"/vsimem/tile_{threading.get_ident()}_{id(rgba)}.png"
     gdal.GetDriverByName("PNG").CreateCopy(name, mem)
-    handle = gdal.VSIFOpenL(name, "rb")
-    gdal.VSIFSeekL(handle, 0, 2)
-    size = gdal.VSIFTellL(handle)
-    gdal.VSIFSeekL(handle, 0, 0)
-    blob = gdal.VSIFReadL(1, size, handle)
-    gdal.VSIFCloseL(handle)
-    gdal.Unlink(name)
-    return blob
+    try:
+        handle = gdal.VSIFOpenL(name, "rb")
+        gdal.VSIFSeekL(handle, 0, 2)
+        size = gdal.VSIFTellL(handle)
+        gdal.VSIFSeekL(handle, 0, 0)
+        blob = gdal.VSIFReadL(1, size, handle)
+        gdal.VSIFCloseL(handle)
+        return blob
+    finally:
+        gdal.Unlink(name)
 
 
 def read_rat(path):

@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 import numpy as np
+from osgeo import gdal
 
 from tests import fixtures
 from viz import gridmath, rasters
@@ -79,6 +80,14 @@ class TestWarpTile(unittest.TestCase):
         out = rasters.warp_tile(self.cdl, z, x, y, resample="near")
         self.assertTrue((out == 0).all())
 
+    def test_multiband_source_without_explicit_bands_raises(self):
+        path = str(self.tmp / "two.tif")
+        rasters.write_multiband_float(path, np.zeros((2, 30, 40), dtype=np.float32),
+                                      gridmath.CPC_GRID)
+        z, x, y = fixtures.tile_covering(path)
+        with self.assertRaises(ValueError):
+            rasters.warp_tile(path, z, x, y, resample="bilinear", dtype="float32")
+
 
 class TestSamplePoint(unittest.TestCase):
     def setUp(self):
@@ -93,6 +102,13 @@ class TestSamplePoint(unittest.TestCase):
 
     def test_point_outside_the_raster_returns_none(self):
         self.assertIsNone(rasters.sample_point(self.cpc, 0.0, 0.0)[0])
+
+    def test_point_half_a_pixel_west_of_the_origin_returns_none(self):
+        # int() truncation toward zero would map this to column 0 and pass the
+        # bounds check; math.floor must reject it instead.
+        x = gridmath.CPC_GRID["origin_x"] - 0.5 * gridmath.CPC_GRID["pixel_x"]
+        y = gridmath.CPC_GRID["origin_y"] + 5 * gridmath.CPC_GRID["pixel_y"]
+        self.assertIsNone(rasters.sample_point(self.cpc, x, y)[0])
 
 
 class TestLonLatTo5070(unittest.TestCase):
@@ -120,7 +136,15 @@ class TestEncodePng(unittest.TestCase):
     def test_alpha_survives_the_round_trip(self):
         rgba = np.zeros((256, 256, 4), dtype=np.uint8)
         rgba[..., 3] = 128
-        self.assertGreater(len(rasters.encode_png(rgba)), 100)
+        blob = rasters.encode_png(rgba)
+        name = "/vsimem/alpha_test.png"
+        gdal.FileFromMemBuffer(name, blob)
+        try:
+            ds = gdal.Open(name)
+            alpha = ds.GetRasterBand(4).ReadAsArray()
+            self.assertTrue((alpha == 128).all())
+        finally:
+            gdal.Unlink(name)
 
 
 class TestReadRat(unittest.TestCase):

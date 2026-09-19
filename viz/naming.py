@@ -1,7 +1,6 @@
 """CPC filename grammar, CDL crop code sets, and CPC-to-CDL year pairing."""
 
 import re
-from typing import Sequence
 
 CROPS = ("corn", "cotton", "soy", "wheat")
 VARS = ("cond", "prog")

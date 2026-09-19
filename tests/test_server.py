@@ -87,7 +87,7 @@ class TestStaticRoutes(ServerTestCase):
         self.assertIn("application/json", ctype)
         catalog = json.loads(body)
         for key in ("crops", "vars", "cpc", "cdl_years", "mask_years",
-                    "cdl_classes", "cdl_pairing"):
+                    "cdl_classes", "cdl_pairing", "var_labels", "crop_codes"):
             self.assertIn(key, catalog)
 
     def test_catalog_reports_the_fixture_mask_year(self):
@@ -202,6 +202,11 @@ class TestPointRoute(ServerTestCase):
     def test_missing_parameters_return_400(self):
         with self.assertRaises(urllib.error.HTTPError) as ctx:
             self.get("/api/point?lon=-93.62")
+        self.assertEqual(ctx.exception.code, 400)
+
+    def test_non_numeric_parameters_return_400(self):
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.get("/api/point?lon=abc&lat=1&crop=corn&year=2024&cdl_year=2024")
         self.assertEqual(ctx.exception.code, 400)
 
 

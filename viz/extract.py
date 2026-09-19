@@ -8,9 +8,9 @@ directories hold the weekly rasters.
 import argparse
 import io
 import re
+import shutil
 import sys
 import zipfile
-from pathlib import Path
 
 from viz import naming, paths
 
@@ -18,13 +18,22 @@ CDL_KEEP_SUFFIXES = (".tif", ".tif.ovr", ".aux", ".tfw")
 _CDL_YEAR_RE = re.compile(r"^(?P<year>\d{4})_30m_cdls\.zip$")
 _CPC_YEAR_RE = re.compile(r"^cpc(?P<year>\d{4})\.zip$")
 
+_COPY_CHUNK = 16 * 1024 * 1024
 
-def _write_if_changed(target, payload):
-    """Write payload unless the target already holds exactly that many bytes."""
-    if target.exists() and target.stat().st_size == len(payload):
+
+def _extract_member(zf, member, target):
+    """Stream one zip member to target unless it already matches by size.
+
+    Compares against ZipInfo.file_size (the uncompressed size) before reading
+    anything, so an idempotent re-run never decompresses a member it is about
+    to skip, and never holds a whole member in memory when it does write.
+    """
+    info = zf.getinfo(member)
+    if target.exists() and target.stat().st_size == info.file_size:
         return False
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(payload)
+    with zf.open(member) as src, open(target, "wb") as dst:
+        shutil.copyfileobj(src, dst, _COPY_CHUNK)
     return True
 
 
@@ -44,7 +53,7 @@ def extract_cpc_year(zip_path, dest):
                     target = dest / naming.cpc_relpath(
                         parsed["crop"], parsed["var"], parsed["year"], parsed["week"]
                     )
-                    if _write_if_changed(target, inner.read(member)):
+                    if _extract_member(inner, member, target):
                         written += 1
     return written
 
@@ -58,7 +67,7 @@ def extract_cdl_year(zip_path, dest):
             leaf = member.rsplit("/", 1)[-1]
             if not leaf.endswith(CDL_KEEP_SUFFIXES):
                 continue
-            if _write_if_changed(dest / leaf, zf.read(member)):
+            if _extract_member(zf, member, dest / leaf):
                 written.append(leaf)
     return written
 

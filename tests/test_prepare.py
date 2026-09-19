@@ -111,9 +111,11 @@ class TestBuildMask(unittest.TestCase):
     def test_primary_band_reflects_actual_corn_cover(self):
         out = prepare.build_mask(self.src, "corn", self.tmp / "mask.tif")
         data = gdal.Open(str(out)).ReadAsArray()
-        # The fixture is corn on its right half, so the covered cells average near 0.5.
+        # The fixture is corn on its right half, so interior cells are wholly
+        # corn and should reach a fraction near 1.0, not just above zero.
         covered = data[0][data[0] > 0]
-        self.assertGreater(float(covered.max()), 0.2)
+        self.assertGreater(float(covered.max()), 0.95)
+        self.assertGreater(float(covered.mean()), 0.5)
 
     def test_double_crop_band_is_zero_when_no_double_crop_codes_present(self):
         out = prepare.build_mask(self.src, "corn", self.tmp / "mask.tif")

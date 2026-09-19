@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import re
 import sys
 import time
@@ -100,8 +101,12 @@ def build_mask(src_path, crop, out_path):
     codes = naming.CROP_CODES[crop]
     vrt = build_lut_vrt(src_path, [codes[kind] for kind in MASK_KINDS])
     data = np.clip(_warp_to_cpc_grid(vrt), 0.0, 1.0)
-    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
-    return Path(rasters.write_multiband_float(out_path, data, gridmath.CPC_GRID))
+    out = Path(out_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    part = out.with_name(out.name + ".part")
+    rasters.write_multiband_float(part, data, gridmath.CPC_GRID)
+    os.replace(part, out)
+    return out
 
 
 def build_masks_for_year(src_path, year, mask_root):
@@ -114,11 +119,13 @@ def build_masks_for_year(src_path, year, mask_root):
     data = np.clip(_warp_to_cpc_grid(build_lut_vrt(src_path, code_sets)), 0.0, 1.0)
 
     written = []
+    Path(mask_root).mkdir(parents=True, exist_ok=True)
     for index, crop in enumerate(naming.CROPS):
         pair = data[2 * index: 2 * index + 2]
         out = Path(mask_root) / f"{year}_{crop}_frac9km.tif"
-        Path(mask_root).mkdir(parents=True, exist_ok=True)
-        rasters.write_multiband_float(out, pair, gridmath.CPC_GRID)
+        part = out.with_name(out.name + ".part")
+        rasters.write_multiband_float(part, pair, gridmath.CPC_GRID)
+        os.replace(part, out)
         written.append(out)
     return written
 

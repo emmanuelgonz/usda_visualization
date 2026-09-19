@@ -54,24 +54,33 @@
   }
 
   function drawCdl() {
-    if (cdlLayer) { map.removeLayer(cdlLayer); }
+    if (cdlLayer && cdlLayer.options.usdaYear === state.cdlYear) { return; }
+    if (cdlLayer) { map.removeLayer(cdlLayer); cdlLayer = null; }
+    if (state.cdlYear === null || state.cdlYear === undefined) { return; }
     cdlLayer = L.tileLayer("/tiles/cdl/" + state.cdlYear + "/{z}/{x}/{y}.png", {
       pane: "cdl", maxNativeZoom: 15, maxZoom: 15, noWrap: true,
+      usdaYear: state.cdlYear,
       attribution: "USDA NASS Cropland Data Layer " + state.cdlYear
     }).addTo(map);
   }
 
   function drawCpc() {
-    if (cpcLayer) { map.removeLayer(cpcLayer); cpcLayer = null; }
-    if (state.week === null || state.week === undefined) { return; }
+    if (state.week === null || state.week === undefined) {
+      if (cpcLayer) { map.removeLayer(cpcLayer); cpcLayer = null; }
+      return;
+    }
     var url = "/tiles/cpc/" + state.crop + "/" + state.var + "/" + state.year +
               "/" + state.week + "/{z}/{x}/{y}.png" +
               (state.mask ? "?mask=" + state.cdlYear : "");
-    cpcLayer = L.tileLayer(url, {
-      pane: "cpc", maxNativeZoom: 15, maxZoom: 15, noWrap: true,
-      opacity: state.opacity,
-      attribution: "USDA NASS Crop Progress and Condition " + state.year
-    }).addTo(map);
+    if (cpcLayer) {
+      cpcLayer.setUrl(url);
+    } else {
+      cpcLayer = L.tileLayer(url, {
+        pane: "cpc", maxNativeZoom: 15, maxZoom: 15, noWrap: true,
+        opacity: state.opacity,
+        attribution: "USDA NASS Crop Progress and Condition " + state.year
+      }).addTo(map);
+    }
     applyMode();
   }
 
@@ -134,12 +143,19 @@
 
   function drawPairing() {
     var paired = state.catalog.cdl_pairing[String(state.year)];
-    var text = "CPC " + state.year + " week " + state.week + " over CDL " + state.cdlYear;
-    if (Number(state.cdlYear) !== Number(state.year)) {
-      text += " (no CDL for " + state.year + "; nearest is " + paired + ")";
-    }
-    if (!maskAvailable()) {
-      text += ". No crop mask built for CDL " + state.cdlYear + ".";
+    var text = "CPC " + state.year + " week " + state.week;
+    if (state.cdlYear === null) {
+      text += ". No CDL rasters available";
+    } else {
+      text += " over CDL " + state.cdlYear;
+      if (Number(state.cdlYear) === Number(paired) && Number(paired) !== Number(state.year)) {
+        text += " (no CDL for " + state.year + "; nearest is " + paired + ")";
+      } else if (Number(state.cdlYear) !== Number(state.year)) {
+        text += " (CDL year chosen manually)";
+      }
+      if (!maskAvailable()) {
+        text += ". No crop mask built for CDL " + state.cdlYear + ".";
+      }
     }
     el("pairing").textContent = text;
   }
@@ -223,12 +239,20 @@
     slider.dataset.weeks = JSON.stringify(weeks);
   }
 
+  function syncCdlYear() {
+    // If no CDL rasters are extracted at all, cdl_pairing is {} and a lookup
+    // would leave state.cdlYear undefined, which requests /tiles/cdl/undefined/.
+    state.cdlYear = (state.catalog.cdl_years || []).length
+      ? state.catalog.cdl_pairing[String(state.year)]
+      : null;
+    fillSelect(el("cdlYear"), state.catalog.cdl_years, state.cdlYear);
+  }
+
   function syncYearSelect() {
     var years = yearsFor(state.crop, state.var);
     if (years.indexOf(state.year) < 0) { state.year = years[years.length - 1]; }
     fillSelect(el("year"), years, state.year);
-    state.cdlYear = state.catalog.cdl_pairing[String(state.year)];
-    fillSelect(el("cdlYear"), state.catalog.cdl_years, state.cdlYear);
+    syncCdlYear();
   }
 
   function stepWeek(delta) {
@@ -249,8 +273,7 @@
     });
     el("year").addEventListener("change", function (e) {
       state.year = Number(e.target.value);
-      state.cdlYear = state.catalog.cdl_pairing[String(state.year)];
-      fillSelect(el("cdlYear"), state.catalog.cdl_years, state.cdlYear);
+      syncCdlYear();
       syncWeekSlider(); refresh();
     });
     el("cdlYear").addEventListener("change", function (e) {
