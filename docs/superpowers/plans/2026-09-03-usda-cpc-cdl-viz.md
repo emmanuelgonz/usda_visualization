@@ -1204,12 +1204,17 @@ def write_cdl_like(path, width=40, height=30, code=1, pixel=300.0):
     table.SetColorEntry(5, (36, 110, 0, 255))
     band.SetRasterColorTable(table)
 
+    # The real CDL attribute table is dense: 256 rows, row index == pixel value.
+    # read_rat relies on that, so the fixture must place each class at the row
+    # matching its code, not at a compact enumerate index.
     rat = gdal.RasterAttributeTable()
     rat.CreateColumn("Count", gdal.GFT_Integer, gdal.GFU_PixelCount)
     rat.CreateColumn("Class_Name", gdal.GFT_String, gdal.GFU_Name)
-    for row, (value, name) in enumerate(((0, "Background"), (1, "Corn"), (5, "Soybeans"))):
-        rat.SetValueAsInt(row, 0, int((data == value).sum()))
-        rat.SetValueAsString(row, 1, name)
+    classes = {0: "Background", 1: "Corn", 5: "Soybeans"}
+    rat.SetRowCount(max(classes) + 1)
+    for value, name in classes.items():
+        rat.SetValueAsInt(value, 0, int((data == value).sum()))
+        rat.SetValueAsString(value, 1, name)
     band.SetDefaultRAT(rat)
 
     band.WriteArray(data)
