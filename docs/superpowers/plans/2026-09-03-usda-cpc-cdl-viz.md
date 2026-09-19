@@ -3262,3 +3262,40 @@ git commit -m "Add Leaflet interface with overlay, swipe, masking, and point ins
 **Placeholder scan.** Every code step carries complete, runnable content. No "TBD", no "handle edge cases", no "similar to Task N".
 
 **Type consistency.** `warp_tile` is called with `resample=`, `bands=`, and `dtype=` in Tasks 5 and 7, matching its Task 5 definition. `colorize_continuous(values, var, alpha=)` and `colorize_thematic(codes, lut)` match between Tasks 4 and 7. `write_multiband_float(path, data, grid)` is defined in Task 5 and used in Task 6. `sample_point(path, x, y, bands=)` returns a list in both Tasks 5 and 7. `cpc_relpath` is defined in Task 1 and used in Tasks 2, 6, and 7. The catalog keys written in Task 6 (`crops`, `vars`, `var_labels`, `cpc`, `cdl_years`, `cdl_classes`, `crop_codes`, `cdl_pairing`) are exactly those read in Tasks 7 and 8.
+
+---
+
+## Appendix: post-review amendments
+
+The final whole-branch review returned no Critical findings, five Important, and sixteen Minor,
+with a verdict of "ready to merge with fixes". One fix wave, commit `63e6e50`, closed the five
+Important items and eleven of the minors. The code blocks above are not rewritten for these; this
+appendix is the record of where the committed code departs from them and why.
+
+| # | File | Change | Reason |
+| --- | --- | --- | --- |
+| I1 | `viz/rasters.py` | Coordinate transform moved from a module global into `_local` | `OGRCoordinateTransformation` is not thread-safe under `ThreadingHTTPServer` |
+| I2 | `viz/extract.py` | `_write_if_changed(target, payload)` replaced by `_extract_member(zf, member, target)`: size check on `ZipInfo.file_size` first, then a streamed `copyfileobj` | The old form decompressed every member before comparing, so a re-run read all 21 GB and held 5 GB `.ovr` files in memory |
+| I3 | `viz/web/app.js` | `drawCdl` skips when the layer's year is unchanged; `drawCpc` uses `setUrl` on an existing layer | Every week step was rebuilding the CDL base layer |
+| I4 | `run.sh` | New `vendor` subcommand running the Leaflet download; `serve` refuses to start without `leaflet.js` | The vendoring step existed only in Task 8 Step 1's prose, so a fresh clone rendered blank |
+| I5 | `viz/prepare.py` | Masks written to `<name>.part` then `os.replace` | An interrupted build left a year that `scan_masks` advertised as complete |
+| M1 | `viz/rasters.py` | `sample_point` uses `math.floor`, not `int` | `int` truncates toward zero, so points up to one pixel west or north read the edge pixel instead of returning `None` |
+| M2 | `viz/tileserver.py` | Non-numeric point parameters return 400 | They surfaced as 500 through the catch-all |
+| M3 | `viz/web/app.js` | Substitution caption only when the CDL year equals the paired year | A deliberately chosen CDL year produced a self-contradictory caption |
+| M4 | `viz/web/app.js` | Empty `cdl_years` leaves `state.cdlYear` null and `drawCdl` skips | Third empty-case guard, alongside the week-list and cover guards |
+| M5 | `tests/test_server.py` | `var_labels` and `crop_codes` asserted among catalog keys | `app.js` dereferences `var_labels` unguarded |
+| M6 | `viz/tileserver.py` | `protocol_version = "HTTP/1.1"` | Keep-alive lets the thread-local dataset cache be reused across requests |
+| M7 | `viz/rasters.py` | `encode_png` unlinks its `/vsimem` file in a `finally` | An exception mid-read leaked one in-memory file per failure |
+| M8 | `viz/rasters.py` | `warp_tile` raises when `bands` is omitted on a multi-band source | It silently returned band 0 |
+| M9 | `tests/test_rasters.py` | Alpha round-trip test decodes the PNG and checks band 4 | It asserted only the byte length |
+| M10 | `tests/test_prepare.py` | Corn-cover test asserts `max > 0.95` and `mean > 0.5` | `max > 0.2` could not fail against a wrong fraction |
+| M11 | `naming`, `extract`, `tileserver` | Unused imports removed | — |
+| — | `run.sh` | Bare `./run.sh` prints usage and exits 2 rather than defaulting to `serve` | Binding a port on a bare invocation is a worse surprise than a usage line; every documented launch is `./run.sh serve` |
+
+Three minors ship as reviewed: a crop or variable change resets a manually chosen CDL year to the
+paired year (the pairing is the documented default), the opacity slider is inert in swipe mode (that
+mode forces full opacity by design), and `catalog.json` is re-read on each point request (measured
+under 1% of the request's time).
+
+Measured mask-build cost, superseding the estimate in Task 6: 2024 took 59.7 minutes wall from the
+extracted file.
