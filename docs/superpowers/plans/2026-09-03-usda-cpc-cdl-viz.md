@@ -2443,7 +2443,10 @@ def _cached(key, z, x, y, render):
         return target.read_bytes()
     blob = render()
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(".png.part")
+    # The temp name carries the thread id: two threads rendering the same
+    # uncached tile would otherwise share one .part file, and the second
+    # replace() raises FileNotFoundError after the first has consumed it.
+    tmp = target.with_name(f"{target.name}.{threading.get_ident()}.part")
     tmp.write_bytes(blob)
     tmp.replace(target)
     return blob
@@ -2558,7 +2561,11 @@ class Handler(BaseHTTPRequestHandler):
             if route.startswith("/static/"):
                 relative = route[len("/static/"):]
                 target = (paths.WEB / relative).resolve()
-                if not str(target).startswith(str(paths.WEB.resolve())):
+                # relative_to raises when target escapes WEB. A string-prefix
+                # test would also accept a sibling directory such as web-other.
+                try:
+                    target.relative_to(paths.WEB.resolve())
+                except ValueError:
                     return self._fail(HTTPStatus.FORBIDDEN, "forbidden")
                 return self._serve_file(target)
 
