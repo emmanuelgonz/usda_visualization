@@ -3297,5 +3297,5 @@ paired year (the pairing is the documented default), the opacity slider is inert
 mode forces full opacity by design), and `catalog.json` is re-read on each point request (measured
 under 1% of the request's time).
 
-Measured mask-build cost, superseding the estimate in Task 6: 2024 took 59.7 minutes wall from the
-extracted file.
+Measured mask-build cost, superseding the estimate in Task 6: 2024 took 59.7 minutes and 2025 took
+58.2 minutes wall from the extracted files, against a 144-minute projection made through the zip.

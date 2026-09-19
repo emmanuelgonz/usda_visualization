@@ -1,7 +1,7 @@
 # USDA CPC over CDL — Local Visualization Design
 
 **Date:** 2026-09-03
-**Status:** Approved design, pending implementation plan
+**Status:** Implemented on branch `viz-implementation`; see the plan's appendix for post-review amendments
 
 ## 1. Purpose
 
