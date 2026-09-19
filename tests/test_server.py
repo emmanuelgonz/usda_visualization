@@ -145,6 +145,28 @@ class TestTileRoutes(ServerTestCase):
             self.get("/tiles/cdl/2024/a/b/c.png")
         self.assertIn(ctx.exception.code, (400, 404))
 
+    def test_concurrent_requests_for_the_same_cold_tile_both_succeed(self):
+        # A tile coordinate no other test touches, so the cache is genuinely cold.
+        x = self.x + 1
+        url = f"/tiles/cdl/2024/{self.z}/{x}/{self.y}.png"
+        barrier = threading.Barrier(2)
+        results = [None, None]
+
+        def worker(index):
+            barrier.wait()
+            results[index] = self.get(url)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        (status_a, _, body_a), (status_b, _, body_b) = results
+        self.assertEqual(status_a, 200)
+        self.assertEqual(status_b, 200)
+        self.assertEqual(body_a, body_b)
+
 
 class TestPointRoute(ServerTestCase):
     def point_url(self):

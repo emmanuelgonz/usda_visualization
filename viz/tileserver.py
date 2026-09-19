@@ -68,7 +68,7 @@ def _cached(key, z, x, y, render):
         return target.read_bytes()
     blob = render()
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_suffix(".png.part")
+    tmp = target.with_name(f"{target.name}.{threading.get_ident()}.part")
     tmp.write_bytes(blob)
     tmp.replace(target)
     return blob
@@ -183,7 +183,9 @@ class Handler(BaseHTTPRequestHandler):
             if route.startswith("/static/"):
                 relative = route[len("/static/"):]
                 target = (paths.WEB / relative).resolve()
-                if not str(target).startswith(str(paths.WEB.resolve())):
+                try:
+                    target.relative_to(paths.WEB.resolve())
+                except ValueError:
                     return self._fail(HTTPStatus.FORBIDDEN, "forbidden")
                 return self._serve_file(target)
 
