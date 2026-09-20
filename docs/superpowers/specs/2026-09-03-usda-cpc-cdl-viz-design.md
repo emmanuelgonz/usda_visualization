@@ -247,3 +247,34 @@ CPC tile, and asserts each response is a valid 256 × 256 PNG.
 
 The 10 m CDL products, any non-CONUS coverage, reprojection of the source archives, and any
 network service at view time.
+
+## 11. Post-merge improvements
+
+The browser checklist run after merge (plan Task 8, Step 9) passed on seven of eight items and
+found one defect: swipe mode hid the CPC layer entirely, because a `clip-path: inset()` measured
+from the edges of a zero-size Leaflet pane collapses to nothing. The clip is now a polygon built
+from the container's corners converted to layer points and re-applied on every map move
+(`dc3af28`). Five improvements followed, each designed and verified with the user.
+
+The click readout moved out of the control panel into a Leaflet popup anchored at the click point,
+replacing the circle marker; the panel keeps a one-line hint. The popup labels its two scales,
+since the heading is the class of the 30 m CDL pixel clicked while the cover table describes the
+9 km CPC cell around it. When that cell holds none of the crop but the CPC surface still carries
+values, a sentence says so above the sparklines, and when no CPC values exist at all it says that
+instead (`d144849`).
+
+A state boundary layer draws CONUS outlines above the CPC layer in a non-interactive pane, with
+each state's name at an interior point below zoom 9 and a checkbox to hide both. The boundaries
+come from the Census 1:5,000,000 cartographic file, fetched once by `run.sh vendor` alongside
+Leaflet; that product carries no interior-point fields, and the point-on-surface of a multipolygon
+put Michigan's label on the Upper Peninsula, so `viz/vendor_states.py` takes the point-on-surface
+of each state's largest polygon (`7c6fb5b`).
+
+With the crop mask on, the CDL base is rendered through a focused palette in which every class
+outside the selected crop's primary and double-crop codes is replaced by its Rec. 601 luminance
+grey, so water stays dark and developed land light while only the crop's fields and the CPC cells
+carry hue. The tile route takes a `focus` parameter and caches focused tiles under their own key
+(`6d59804`).
+
+Two limitations from the final review ship as reviewed: changing crop or variable resets a manually
+chosen CDL year to the paired year, and the opacity slider is inert in swipe mode.
