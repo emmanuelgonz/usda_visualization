@@ -122,14 +122,11 @@ class TestFocusLut(unittest.TestCase):
         np.testing.assert_array_equal(out[1], base[1])
         np.testing.assert_array_equal(out[225], base[225])
 
-    def test_other_codes_become_luminance_grey_with_alpha_kept(self):
+    def test_other_codes_become_white_with_alpha_kept(self):
         out = color.focus_lut(self._base(), (1,))
-        r, g, b, a = (int(v) for v in out[5])
-        self.assertEqual(r, g); self.assertEqual(g, b); self.assertEqual(a, 255)
-        # Rec. 601 luminance of (36, 110, 0) is about 75.
-        self.assertTrue(70 <= r <= 80, r)
-        water = out[111]
-        self.assertTrue(int(water[0]) < int(out[5][0]) + 60)  # still darker than a light class would be
+        for code in (5, 111):
+            r, g, b, a = (int(v) for v in out[code])
+            self.assertEqual((r, g, b, a), (255, 255, 255, 255), code)
 
     def test_class_zero_stays_transparent(self):
         self.assertEqual(int(color.focus_lut(self._base(), (1,))[0, 3]), 0)

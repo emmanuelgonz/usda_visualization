@@ -286,7 +286,7 @@ class TestInterfaceAssets(ServerTestCase):
         text = app.decode()
         self.assertIn("state.cdlVisible", text[text.index("function drawCdl"):text.index("function drawCpc")])
         _, _, css = self.get("/static/style.css")
-        self.assertIn("#e9e9e6", css.decode())
+        self.assertIn("#map { position: absolute; inset: 0 340px 0 0; background: #fff;", css.decode())
 
     def test_index_loads_vendored_leaflet_not_a_cdn(self):
         _, _, body = self.get("/")

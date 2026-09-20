@@ -75,7 +75,7 @@ def _cached(key, z, x, y, render):
 
 
 def focus_palette(year, crop):
-    """The CDL palette with every class but this crop's greyed, cached per year and crop."""
+    """The CDL palette with every class but this crop's turned white, cached per year and crop."""
     key = f"{year}-f{crop}"
     with _palette_lock:
         lut = _palettes.get(key)
