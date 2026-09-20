@@ -5,6 +5,7 @@ import json
 import re
 import sys
 import threading
+import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -28,6 +29,11 @@ TILE_CPC_RE = re.compile(
     r"^/tiles/cpc/(?P<crop>[a-z]+)/(?P<var>cond|prog)/(?P<year>\d{4})/(?P<week>\d+)"
     r"/(?P<z>\d+)/(?P<x>\d+)/(?P<y>\d+)\.png$"
 )
+
+# Changes on every server start. The interface appends it to tile URLs so the
+# browser's HTTP cache is invalidated whenever the server (and so any palette
+# or ramp code) is restarted, while tiles stay cached within one run.
+SERVER_TOKEN = str(int(time.time()))
 
 _palette_lock = threading.Lock()
 _palettes = {}
@@ -209,7 +215,9 @@ class Handler(BaseHTTPRequestHandler):
             if route == "/api/catalog":
                 if not paths.CATALOG.is_file():
                     return self._fail(HTTPStatus.NOT_FOUND, "catalog not built; run prepare")
-                return self._send(paths.CATALOG.read_bytes(), CONTENT_TYPES[".json"])
+                catalog = json.loads(paths.CATALOG.read_text())
+                catalog["server_token"] = SERVER_TOKEN
+                return self._send(json.dumps(catalog).encode(), CONTENT_TYPES[".json"])
 
             if route == "/api/point":
                 return self._handle_point(query)

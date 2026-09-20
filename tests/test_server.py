@@ -90,6 +90,12 @@ class TestStaticRoutes(ServerTestCase):
                     "cdl_classes", "cdl_pairing", "var_labels", "crop_codes"):
             self.assertIn(key, catalog)
 
+    def test_catalog_carries_a_server_token_for_tile_cache_busting(self):
+        _, _, body = self.get("/api/catalog")
+        token = json.loads(body)["server_token"]
+        self.assertTrue(token)
+        self.assertEqual(token, tileserver.SERVER_TOKEN)
+
     def test_catalog_reports_the_fixture_mask_year(self):
         _, _, body = self.get("/api/catalog")
         self.assertEqual(json.loads(body)["mask_years"], [])  # only corn built, not all four
@@ -287,6 +293,14 @@ class TestInterfaceAssets(ServerTestCase):
         self.assertIn("state.cdlVisible", text[text.index("function drawCdl"):text.index("function drawCpc")])
         _, _, css = self.get("/static/style.css")
         self.assertIn("#map { position: absolute; inset: 0 340px 0 0; background: #fff;", css.decode())
+
+    def test_app_appends_the_server_token_to_every_tile_url(self):
+        _, _, body = self.get("/static/app.js")
+        text = body.decode()
+        cdl = text[text.index("function drawCdl"):text.index("function drawCpc")]
+        cpc = text[text.index("function drawCpc"):text.index("function applyMode")]
+        self.assertIn("server_token", cdl)
+        self.assertIn("server_token", cpc)
 
     def test_index_loads_vendored_leaflet_not_a_cdn(self):
         _, _, body = self.get("/")

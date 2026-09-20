@@ -76,7 +76,8 @@
     if (cdlLayer) { map.removeLayer(cdlLayer); cdlLayer = null; }
     if (state.cdlYear === null || state.cdlYear === undefined) { return; }
     cdlLayer = L.tileLayer("/tiles/cdl/" + state.cdlYear + "/{z}/{x}/{y}.png" +
-                           (focus ? "?focus=" + focus : ""), {
+                           "?t=" + state.catalog.server_token +
+                           (focus ? "&focus=" + focus : ""), {
       pane: "cdl", maxNativeZoom: 15, maxZoom: 15, noWrap: true,
       usdaYear: state.cdlYear, usdaFocus: focus,
       attribution: "USDA NASS Cropland Data Layer " + state.cdlYear
@@ -90,7 +91,8 @@
     }
     var url = "/tiles/cpc/" + state.crop + "/" + state.var + "/" + state.year +
               "/" + state.week + "/{z}/{x}/{y}.png" +
-              (state.mask ? "?mask=" + state.cdlYear : "");
+              "?t=" + state.catalog.server_token +
+              (state.mask ? "&mask=" + state.cdlYear : "");
     if (cpcLayer) {
       cpcLayer.setUrl(url);
     } else {
