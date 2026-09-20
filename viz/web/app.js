@@ -11,6 +11,7 @@
     cdlYear: 2025,
     mode: "overlay",
     mask: false,
+    cdlVisible: true,
     opacity: 0.7,
     playing: false,
     timer: null
@@ -64,6 +65,12 @@
     // With the mask on, every CDL class except the selected crop's is greyed
     // server-side so the crop's fields and the CPC cells are the only colour.
     var focus = state.mask ? state.crop : null;
+    // Visibility is checked before the "unchanged" shortcut, or unticking the
+    // box would leave a layer whose year and focus still match in place.
+    if (!state.cdlVisible) {
+      if (cdlLayer) { map.removeLayer(cdlLayer); cdlLayer = null; }
+      return;
+    }
     if (cdlLayer && cdlLayer.options.usdaYear === state.cdlYear &&
         cdlLayer.options.usdaFocus === focus) { return; }
     if (cdlLayer) { map.removeLayer(cdlLayer); cdlLayer = null; }
@@ -368,6 +375,9 @@
       state.opacity = Number(e.target.value) / 100;
       el("opacityOut").textContent = e.target.value + "%";
       if (cpcLayer && state.mode === "overlay") { cpcLayer.setOpacity(state.opacity); }
+    });
+    el("cdl").addEventListener("change", function (e) {
+      state.cdlVisible = e.target.checked; drawCdl();
     });
     el("mask").addEventListener("change", function (e) {
       state.mask = e.target.checked; drawCdl(); drawCpc();

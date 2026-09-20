@@ -15,7 +15,7 @@ html, body {
   color: var(--panel-fg);
 }
 
-#map { position: absolute; inset: 0 340px 0 0; }
+#map { position: absolute; inset: 0 340px 0 0; background: #e9e9e6; }  /* shows when the CDL is hidden */
 
 #panel {
   position: absolute;

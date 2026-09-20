@@ -279,6 +279,15 @@ class TestInterfaceAssets(ServerTestCase):
         self.assertIn("?focus=", text)
         self.assertIn("state.mask", text[text.index("function drawCdl"):text.index("function drawCpc")])
 
+    def test_cdl_base_layer_is_toggleable(self):
+        _, _, index = self.get("/")
+        self.assertIn('id="cdl"', index.decode())
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        self.assertIn("state.cdlVisible", text[text.index("function drawCdl"):text.index("function drawCpc")])
+        _, _, css = self.get("/static/style.css")
+        self.assertIn("#e9e9e6", css.decode())
+
     def test_index_loads_vendored_leaflet_not_a_cdn(self):
         _, _, body = self.get("/")
         text = body.decode()
