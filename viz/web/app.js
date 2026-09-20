@@ -19,8 +19,15 @@
   var map = L.map("map", { center: [39.5, -96.0], zoom: 4, minZoom: 3, maxZoom: 15 });
   map.createPane("cdl");
   map.createPane("cpc");
+  map.createPane("states");
   map.getPane("cdl").style.zIndex = 400;
   map.getPane("cpc").style.zIndex = 450;
+  map.getPane("states").style.zIndex = 460;
+
+  // State names are shown below this zoom; above it one state fills the view.
+  var LABEL_MAX_ZOOM = 9;
+  var stateLines = null;
+  var stateLabels = null;
 
   var cdlLayer = null;
   var cpcLayer = null;
@@ -137,6 +144,34 @@
       clipX + "px " + nw.y + "px, " + se.x + "px " + nw.y + "px, " +
       se.x + "px " + se.y + "px, " + clipX + "px " + se.y + "px)";
     if (cpcLayer) { cpcLayer.setOpacity(1); }
+  }
+
+  function loadStates() {
+    fetch("/static/vendor/states.geojson").then(function (r) { return r.json(); }).then(function (geo) {
+      stateLines = L.geoJSON(geo, {
+        pane: "states", interactive: false,
+        style: { color: "#222", weight: 1, opacity: 0.6, fill: false }
+      });
+      stateLabels = L.layerGroup();
+      geo.features.forEach(function (f) {
+        var p = f.properties;
+        stateLabels.addLayer(L.marker([Number(p.INTPTLAT), Number(p.INTPTLON)], {
+          pane: "states", interactive: false, keyboard: false,
+          icon: L.divIcon({ className: "state-label", html: p.NAME, iconSize: [0, 0] })
+        }));
+      });
+      syncStates();
+    }).catch(function () { /* boundaries are optional; the map works without them */ });
+  }
+
+  function syncStates() {
+    if (!stateLines) { return; }
+    var on = el("states").checked;
+    var showLabels = on && map.getZoom() < LABEL_MAX_ZOOM;
+    if (on && !map.hasLayer(stateLines)) { stateLines.addTo(map); }
+    if (!on && map.hasLayer(stateLines)) { map.removeLayer(stateLines); }
+    if (showLabels && !map.hasLayer(stateLabels)) { stateLabels.addTo(map); }
+    if (!showLabels && map.hasLayer(stateLabels)) { map.removeLayer(stateLabels); }
   }
 
   function drawLegend() {
@@ -332,6 +367,8 @@
     el("mask").addEventListener("change", function (e) {
       state.mask = e.target.checked; drawCpc();
     });
+    el("states").addEventListener("change", syncStates);
+    map.on("zoomend", syncStates);
     Array.prototype.forEach.call(document.getElementsByName("mode"), function (radio) {
       radio.addEventListener("change", function (e) {
         if (e.target.checked) { state.mode = e.target.value; applyMode(); }
@@ -362,5 +399,6 @@
     syncWeekSlider();
     wire();
     refresh();
+    loadStates();
   });
 })();

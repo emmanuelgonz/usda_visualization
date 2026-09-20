@@ -20,6 +20,7 @@ CONTENT_TYPES = {
     ".png": "image/png",
     ".svg": "image/svg+xml",
     ".json": "application/json",
+    ".geojson": "application/geo+json",
 }
 
 TILE_CDL_RE = re.compile(r"^/tiles/cdl/(?P<year>\d{4})/(?P<z>\d+)/(?P<x>\d+)/(?P<y>\d+)\.png$")

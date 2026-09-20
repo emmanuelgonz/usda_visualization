@@ -232,6 +232,34 @@ class TestInterfaceAssets(ServerTestCase):
         _, _, index = self.get("/")
         self.assertIn("Click the map to inspect a cell", index.decode())
 
+    def test_state_boundaries_are_served_as_conus_geojson(self):
+        status, ctype, body = self.get("/static/vendor/states.geojson")
+        self.assertEqual(status, 200)
+        self.assertIn("json", ctype)
+        data = json.loads(body)
+        self.assertEqual(data["type"], "FeatureCollection")
+        self.assertEqual(len(data["features"]), 49)  # 48 states plus DC
+        names = set()
+        for feature in data["features"]:
+            props = feature["properties"]
+            for key in ("NAME", "STUSPS", "INTPTLAT", "INTPTLON"):
+                self.assertIn(key, props)
+            names.add(props["STUSPS"])
+        self.assertIn("IA", names)
+        self.assertNotIn("AK", names)
+        self.assertNotIn("HI", names)
+        self.assertNotIn("PR", names)
+
+    def test_app_draws_boundaries_non_interactively_with_zoom_gated_labels(self):
+        _, _, body = self.get("/static/app.js")
+        text = body.decode()
+        self.assertIn("/static/vendor/states.geojson", text)
+        self.assertIn("L.geoJSON(", text)
+        self.assertIn("interactive: false", text)
+        self.assertIn("LABEL_MAX_ZOOM", text)
+        _, _, index = self.get("/")
+        self.assertIn('id="states"', index.decode())
+
     def test_index_loads_vendored_leaflet_not_a_cdn(self):
         _, _, body = self.get("/")
         text = body.decode()

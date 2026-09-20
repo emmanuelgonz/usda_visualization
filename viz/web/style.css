@@ -83,3 +83,14 @@ output { font-variant-numeric: tabular-nums; font-weight: 450; color: var(--mute
   width: 26px; height: 26px; margin: -13px 0 0 -13px; border-radius: 50%;
   background: #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.35);
 }
+
+/* State boundaries and names. The pane ignores the pointer so clicks reach the map. */
+.leaflet-states-pane { pointer-events: none; }
+.state-label {
+  font: 600 11px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: #1c1c1c;
+  white-space: nowrap;
+  transform: translate(-50%, -50%);
+  text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 3px #fff, 0 0 3px #fff;
+  letter-spacing: 0.02em;
+}

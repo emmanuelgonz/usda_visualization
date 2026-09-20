@@ -18,11 +18,20 @@ case "${1:-}" in
       curl -fsSL -o "viz/web/vendor/leaflet/images/$img" "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/$img"
     done
     ls -la viz/web/vendor/leaflet viz/web/vendor/leaflet/images
+    # State boundaries: Census cartographic boundary file at 1:5,000,000,
+    # converted straight from the zip to CONUS-only GeoJSON. FIPS 02 Alaska,
+    # 15 Hawaii, 60 American Samoa, 66 Guam, 69 Northern Marianas,
+    # 72 Puerto Rico, 78 Virgin Islands are dropped.
+    tmp=$(mktemp -d)
+    curl -fsSL -o "$tmp/states.zip" https://www2.census.gov/geo/tiger/GENZ2023/shp/cb_2023_us_state_5m.zip
+    python3 -m viz.vendor_states "/vsizip/$tmp/states.zip/cb_2023_us_state_5m.shp" viz/web/vendor/states.geojson
+    rm -rf "$tmp"
+    ls -la viz/web/vendor/states.geojson
     ;;
   serve)
     shift
-    if [ ! -f viz/web/vendor/leaflet/leaflet.js ]; then
-      echo "Leaflet is not vendored; run ./run.sh vendor first" >&2
+    if [ ! -f viz/web/vendor/leaflet/leaflet.js ] || [ ! -f viz/web/vendor/states.geojson ]; then
+      echo "Leaflet or the state boundaries are not vendored; run ./run.sh vendor first" >&2
       exit 1
     fi
     exec python3 -m viz.tileserver "$@"
