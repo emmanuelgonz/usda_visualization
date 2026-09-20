@@ -1,0 +1,79 @@
+:root {
+  --panel-bg: #ffffff;
+  --panel-fg: #1c1c1c;
+  --muted: #63666a;
+  --line: #d8d8d4;
+  --accent: #1a6e2f;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: var(--panel-fg);
+}
+
+#map { position: absolute; inset: 0 340px 0 0; }
+
+#panel {
+  position: absolute;
+  top: 0; right: 0; bottom: 0;
+  width: 340px;
+  padding: 16px;
+  overflow-y: auto;
+  background: var(--panel-bg);
+  border-left: 1px solid var(--line);
+}
+
+h1 { margin: 0 0 14px; font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
+
+.controls {
+  display: grid;
+  gap: 9px;
+  padding-bottom: 13px;
+  margin-bottom: 13px;
+  border-bottom: 1px solid var(--line);
+}
+
+label { display: grid; gap: 3px; font-weight: 550; }
+label.inline { display: flex; align-items: center; gap: 6px; font-weight: 450; }
+label.inline:has(input:disabled) { color: var(--muted); cursor: not-allowed; }
+
+select, input[type="range"] { width: 100%; }
+select { padding: 4px; border: 1px solid var(--line); border-radius: 3px; background: #fff; }
+
+fieldset { border: 1px solid var(--line); border-radius: 3px; padding: 7px 9px; margin: 0; }
+legend { padding: 0 4px; font-weight: 550; }
+
+.row { display: flex; gap: 6px; }
+.row button { flex: 1; padding: 4px; border: 1px solid var(--line); border-radius: 3px;
+              background: #fff; cursor: pointer; font: inherit; }
+.row button:hover { border-color: var(--accent); }
+
+output { font-variant-numeric: tabular-nums; font-weight: 450; color: var(--muted); }
+
+.note { color: var(--muted); margin: 8px 0 0; }
+
+#legend .swatches { display: flex; height: 13px; border-radius: 2px; overflow: hidden; }
+#legend .swatches span { flex: 1; }
+#legend .labels { display: flex; justify-content: space-between;
+                  color: var(--muted); font-size: 11px; margin-top: 3px; }
+
+#readout table { width: 100%; border-collapse: collapse; margin-top: 7px; }
+#readout th { text-align: left; font-weight: 550; padding: 2px 0; }
+#readout td { text-align: right; font-variant-numeric: tabular-nums; padding: 2px 0; }
+#readout svg { width: 100%; height: 72px; margin-top: 9px; }
+
+/* Swipe mode: the CPC pane is clipped to the right of the divider. */
+#swipeHandle {
+  position: absolute; top: 0; bottom: 0; width: 3px;
+  background: #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.35);
+  cursor: ew-resize; z-index: 700;
+}
+#swipeHandle::after {
+  content: ""; position: absolute; top: 50%; left: 50%;
+  width: 26px; height: 26px; margin: -13px 0 0 -13px; border-radius: 50%;
+  background: #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.35);
+}

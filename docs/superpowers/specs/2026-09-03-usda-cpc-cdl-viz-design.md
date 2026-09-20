@@ -1,7 +1,7 @@
 # USDA CPC over CDL — Local Visualization Design
 
 **Date:** 2026-09-03
-**Status:** Approved design, pending implementation plan
+**Status:** Implemented on branch `viz-implementation`; see the plan's appendix for post-review amendments
 
 ## 1. Purpose
 
@@ -13,17 +13,29 @@ dependency at view time.
 
 | Dataset | Extent | Format | Grid | Values |
 | --- | --- | --- | --- | --- |
-| CPC gridded | 2015–2026 × {corn, cotton, soy, wheat} × {condition, progress} × ~32 weeks ≈ 3,000 rasters | Float32 GeoTIFF, LZW, zip-within-zip | EPSG:5070, 8999.2555 × 8995.4865 m | Condition ≈ 1.85–4.51; progress 0–1; NoData −9999 |
-| CDL 30 m | 2022, 2023, 2024, 2025 | Byte GeoTIFF, PACKBITS, 256-entry palette, embedded RAT, 7 overview levels | EPSG:5070, 30 m, 153811 × 96523 | Class codes 1–254; 0 = Background |
+| CPC gridded | 2015–2026 × {corn, cotton, soy, wheat} × {condition, progress} × ~32 weeks = 2,909 rasters (counted) | Float32 GeoTIFF, LZW, zip-within-zip | EPSG:5070, 8999.2555 × 8995.4865 m | Condition ≈ 1.85–4.51; progress 0–1; NoData −9999 |
+| CDL 30 m | 2022, 2023, 2024, 2025 | Byte GeoTIFF, PACKBITS, 256-entry palette, embedded RAT, 7 overview levels | EPSG:5070, 30 m; 153811 × 96523 for 2022–2024, 160171 × 105432 for 2025 | Class codes 1–254; 0 = Background |
+
+Extracted sizes, measured rather than estimated: CPC occupies 501 MB and CDL 21 GB, the latter split
+7.8 GB each for 2022 and 2023, 2.9 GB for 2024, and 1.8 GB for 2025. The 2022 and 2023 archives carry
+far larger overview pyramids than the later years.
 
 Both datasets are native EPSG:5070 (NAD83 / Conus Albers), so they co-register without
 reprojection; the only warp required is EPSG:5070 → EPSG:3857 for browser display.
 
-Two properties of the CPC archive constrain the design. Raster extent varies week to week on a
+Three properties of the CPC archive constrain the design. Raster extent varies week to week on a
 shared grid (317 × 211 at week 15 up to 508 × 320 at week 20), so each file's own geotransform is
 read rather than a single assumed extent. The `progress` variable is a monotonic seasonal
 development index rather than a named growth stage: corn 2024 rises from a mean of 0.087 at week
-15 to 0.983 at week 46, and the legend therefore reads as fraction of season completed.
+15 to 0.983 at week 46, and the legend therefore reads as fraction of season completed. Filenames
+change convention mid-archive: 2015–2020 capitalize the crop prefix for corn and soy
+(`CornCond15w22.tif`, `SoyCond18w30.tif`) while 2021 onward do not (`cornCond24w15.tif`), so the
+parser matches the prefix case-insensitively and normalizes to lowercase. A lowercase-only pattern
+silently drops 590 rasters, all of them corn condition, corn progress, or soy condition.
+
+The CDL archives are likewise not uniform. The 2025 archive ships no `.tif.ovr` or `.tfw` sidecar,
+embedding its overview pyramid inside the TIFF instead, so extraction writes two files for that year
+against four for the others while GDAL still reports seven overview levels.
 
 The 10 m CDL products for 2024 and 2025 are out of scope.
 
@@ -53,9 +65,9 @@ Four components, each independently testable.
   usda_crop_progress_and_condition_gridded_layers/   source archives, untouched
   usda_cropland_data_layer/                          source archives, untouched
   data/
-    cpc/{crop}/{cond|prog}/{crop}{Cond|Prog}{yy}w{ww}.tif    ~3,000 files, ~1 GB
-    cdl/{year}_30m_cdls.tif  + .ovr .aux .tfw                 4 years, ~10 GB
-    masks/{cdl_year}_{crop}_frac9km.tif                       16 files, 2 bands each
+    cpc/{crop}/{cond|prog}/{crop}{Cond|Prog}{yy}w{ww}.tif    2,909 files, 501 MB
+    cdl/{year}_30m_cdls.tif  + .ovr .aux .tfw                 4 years, 21 GB
+    masks/{cdl_year}_{crop}_frac9km.tif                       8 files (2024, 2025), 2 bands each
     catalog.json
   cache/tiles/...                                             grows on demand
   viz/                                                        code
@@ -72,8 +84,8 @@ precomputed statistics unnecessary. Crop directory names are discovered from eac
 than assumed, so a year that departs from the `corn`/`cotton`/`soy`/`wheat` convention still
 extracts.
 
-Weekly filenames parse with `(?P<crop>[a-z]+)(?P<var>Cond|Prog)(?P<yy>\d{2})w(?P<ww>\d+)\.tif`,
-and the four-digit year is `2000 + yy`.
+Weekly filenames parse with `(?P<crop>[A-Za-z]+)(?P<var>Cond|Prog)(?P<yy>\d{2})w(?P<ww>\d+)\.tif`,
+the crop prefix lowercased before use, and the four-digit year is `2000 + yy`.
 
 CDL extraction copies the `.tif`, `.ovr`, `.aux`, and `.tfw` members of each 30 m archive; the
 `.ovr` pyramid is required for tile performance and the `.aux` carries the raster attribute table.
