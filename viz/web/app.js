@@ -107,9 +107,15 @@
       }
       swipeHandle.style.display = "block";
       pane.style.opacity = 1;
+      map.on("move", positionSwipe);
+      map.on("zoom", positionSwipe);
+      map.on("resize", positionSwipe);
       positionSwipe();
     } else {
       if (swipeHandle) { swipeHandle.style.display = "none"; }
+      map.off("move", positionSwipe);
+      map.off("zoom", positionSwipe);
+      map.off("resize", positionSwipe);
       pane.style.clipPath = "";
       pane.style.opacity = 1;
       if (cpcLayer) { cpcLayer.setOpacity(state.opacity); }
@@ -117,10 +123,19 @@
   }
 
   function positionSwipe() {
-    var width = map.getContainer().clientWidth;
-    var x = Math.round(width * swipeFraction);
+    var size = map.getSize();
+    var x = Math.round(size.x * swipeFraction);
     swipeHandle.style.left = x + "px";
-    map.getPane("cpc").style.clipPath = "inset(0 0 0 " + x + "px)";
+    // Leaflet panes are 0x0 boxes, so an edge-inset clip measured from the pane's
+    // own edges collapses to nothing. Build the clip from the container's
+    // corners converted into the pane's (layer) coordinate space instead, and
+    // re-apply it on every map move because panning translates that space.
+    var nw = map.containerPointToLayerPoint([0, 0]);
+    var se = map.containerPointToLayerPoint(size);
+    var clipX = nw.x + (se.x - nw.x) * swipeFraction;
+    map.getPane("cpc").style.clipPath = "polygon(" +
+      clipX + "px " + nw.y + "px, " + se.x + "px " + nw.y + "px, " +
+      se.x + "px " + se.y + "px, " + clipX + "px " + se.y + "px)";
     if (cpcLayer) { cpcLayer.setOpacity(1); }
   }
 
@@ -321,7 +336,6 @@
         .catch(function () { el("readout").innerHTML = '<p class="note">Read failed.</p>'; });
     });
 
-    map.on("resize", function () { if (state.mode === "swipe") { positionSwipe(); } });
   }
 
   fetch("/api/catalog").then(function (r) { return r.json(); }).then(function (catalog) {

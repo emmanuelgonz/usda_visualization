@@ -211,6 +211,16 @@ class TestPointRoute(ServerTestCase):
 
 
 class TestInterfaceAssets(ServerTestCase):
+    def test_swipe_clips_in_layer_space_and_tracks_map_moves(self):
+        # Leaflet panes are 0x0 boxes, so an inset() clip on one collapses to
+        # nothing and the CPC layer vanishes. The clip must be built from
+        # container corners converted to layer points, and re-applied on move.
+        _, _, body = self.get("/static/app.js")
+        text = body.decode()
+        self.assertNotIn("inset(", text)
+        self.assertIn("containerPointToLayerPoint", text)
+        self.assertIn('map.on("move"', text)
+
     def test_index_loads_vendored_leaflet_not_a_cdn(self):
         _, _, body = self.get("/")
         text = body.decode()
