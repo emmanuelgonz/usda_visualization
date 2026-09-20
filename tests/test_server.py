@@ -221,6 +221,17 @@ class TestInterfaceAssets(ServerTestCase):
         self.assertIn("containerPointToLayerPoint", text)
         self.assertIn('map.on("move"', text)
 
+    def test_readout_is_a_map_popup_not_a_panel_section(self):
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        self.assertIn("L.popup(", text)
+        self.assertNotIn("circleMarker", text)
+        self.assertIn("30 m pixel", text)
+        self.assertIn("9 km CPC cell", text)
+        self.assertIn("No CPC data at this cell", text)
+        _, _, index = self.get("/")
+        self.assertIn("Click the map to inspect a cell", index.decode())
+
     def test_index_loads_vendored_leaflet_not_a_cdn(self):
         _, _, body = self.get("/")
         text = body.decode()

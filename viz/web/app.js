@@ -24,7 +24,7 @@
 
   var cdlLayer = null;
   var cpcLayer = null;
-  var marker = null;
+  var readoutPopup = null;
   var swipeHandle = null;
   var swipeFraction = 0.5;
 
@@ -213,18 +213,32 @@
     var noCover = (cover.primary === null || cover.primary === undefined) &&
                   (cover.double === null || cover.double === undefined);
     var total = noCover ? null : (cover.primary || 0) + (cover.double || 0);
+    var cond = report.series.cond || [];
+    var prog = report.series.prog || [];
+    var hasSeries = cond.some(function (p) { return p.value !== null; }) ||
+                    prog.some(function (p) { return p.value !== null; });
+
     var html =
       "<h2>" + (report.cdl_class || "Unknown") + "</h2>" +
+      '<p class="scale">CDL ' + report.cdl_year + " · 30 m pixel</p>" +
+      '<p class="section">9 km CPC cell</p>' +
       "<table>" +
       "<tr><th>" + report.crop + " cover</th><td>" + pct(total) + "</td></tr>" +
       "<tr><th>&nbsp;&nbsp;primary</th><td>" + pct(cover.primary) + "</td></tr>" +
       "<tr><th>&nbsp;&nbsp;double-crop</th><td>" + pct(cover.double) + "</td></tr>" +
-      "</table>" +
-      "<p class=\"note\">Condition, weeks " + state.year + "</p>" +
-      sparkline(report.series.cond || [], 1, 5) +
-      "<p class=\"note\">Progress, weeks " + state.year + "</p>" +
-      sparkline(report.series.prog || [], 0, 1);
-    el("readout").innerHTML = html;
+      "</table>";
+
+    if (!hasSeries) {
+      html += '<p class="note">No CPC data at this cell.</p>';
+    } else {
+      if (total === 0) {
+        html += '<p class="note">No ' + report.crop + " in this 9 km cell. The CPC surface " +
+                "extends beyond mapped " + report.crop + ", so the series below is not field-based.</p>";
+      }
+      html += '<p class="note">Condition, weeks ' + state.year + "</p>" + sparkline(cond, 1, 5) +
+              '<p class="note">Progress, weeks ' + state.year + "</p>" + sparkline(prog, 0, 1);
+    }
+    return html;
   }
 
   function refresh() {
@@ -325,15 +339,17 @@
     });
 
     map.on("click", function (e) {
-      if (marker) { map.removeLayer(marker); }
-      marker = L.circleMarker(e.latlng, { radius: 5, color: "#fff", weight: 2,
-                                          fillColor: "#111", fillOpacity: 1 }).addTo(map);
-      el("readout").innerHTML = '<p class="note">Reading…</p>';
+      readoutPopup = L.popup({ maxWidth: 320, className: "readout-popup" })
+        .setLatLng(e.latlng)
+        .setContent('<p class="note">Reading…</p>')
+        .openOn(map);
       var url = "/api/point?lon=" + e.latlng.lng.toFixed(6) +
                 "&lat=" + e.latlng.lat.toFixed(6) +
                 "&crop=" + state.crop + "&year=" + state.year + "&cdl_year=" + state.cdlYear;
-      fetch(url).then(function (r) { return r.json(); }).then(showReadout)
-        .catch(function () { el("readout").innerHTML = '<p class="note">Read failed.</p>'; });
+      var popup = readoutPopup;
+      fetch(url).then(function (r) { return r.json(); })
+        .then(function (report) { if (popup.isOpen()) { popup.setContent(showReadout(report)); } })
+        .catch(function () { if (popup.isOpen()) { popup.setContent('<p class="note">Read failed.</p>'); } });
     });
 
   }

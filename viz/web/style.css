@@ -61,10 +61,16 @@ output { font-variant-numeric: tabular-nums; font-weight: 450; color: var(--mute
 #legend .labels { display: flex; justify-content: space-between;
                   color: var(--muted); font-size: 11px; margin-top: 3px; }
 
-#readout table { width: 100%; border-collapse: collapse; margin-top: 7px; }
-#readout th { text-align: left; font-weight: 550; padding: 2px 0; }
-#readout td { text-align: right; font-variant-numeric: tabular-nums; padding: 2px 0; }
-#readout svg { width: 100%; height: 72px; margin-top: 9px; }
+/* Click readout, rendered inside a Leaflet popup anchored at the click point. */
+.readout-popup .leaflet-popup-content { margin: 12px 14px; font: 13px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.readout-popup h2 { margin: 0; font-size: 14px; font-weight: 650; }
+.readout-popup .scale { margin: 1px 0 9px; color: var(--muted); font-size: 11px; }
+.readout-popup .section { margin: 0 0 2px; font-weight: 550; }
+.readout-popup table { width: 100%; border-collapse: collapse; }
+.readout-popup th { text-align: left; font-weight: 450; padding: 1px 0; }
+.readout-popup td { text-align: right; font-variant-numeric: tabular-nums; padding: 1px 0; }
+.readout-popup .note { color: var(--muted); margin: 8px 0 0; }
+.readout-popup svg { width: 100%; height: 64px; margin-top: 5px; display: block; }
 
 /* Swipe mode: the CPC pane is clipped to the right of the divider. */
 #swipeHandle {
