@@ -282,7 +282,7 @@ class TestInterfaceAssets(ServerTestCase):
     def test_app_sends_focus_only_under_the_mask(self):
         _, _, body = self.get("/static/app.js")
         text = body.decode()
-        self.assertIn("?focus=", text)
+        self.assertIn("&focus=", text)
         self.assertIn("state.mask", text[text.index("function drawCdl"):text.index("function drawCpc")])
 
     def test_cdl_base_layer_is_toggleable(self):
