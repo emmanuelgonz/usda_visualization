@@ -323,6 +323,17 @@ class TestInterfaceAssets(ServerTestCase):
         _, _, app = self.get("/static/app.js")
         self.assertIn("&dim=", app.decode())
 
+    def test_both_layers_have_opacity_sliders(self):
+        _, _, index = self.get("/")
+        html = index.decode()
+        self.assertIn('id="cdlOpacity"', html)
+        self.assertIn('id="opacity"', html)
+        self.assertIn("CDL opacity", html)
+        self.assertIn("CPC opacity", html)
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        self.assertIn("state.cdlOpacity", text[text.index("function drawCdl"):text.index("function drawCpc")])
+
     def test_index_loads_vendored_leaflet_not_a_cdn(self):
         _, _, body = self.get("/")
         text = body.decode()

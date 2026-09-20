@@ -52,7 +52,10 @@
       <label class="inline"><input type="radio" name="dim" value="grey"> Grey</label>
     </div>
     <label class="inline"><input type="checkbox" id="states" checked> State boundaries</label>
-    <label>Opacity <output id="opacityOut">70%</output>
+    <label>CDL opacity <output id="cdlOpacityOut">100%</output>
+      <input type="range" id="cdlOpacity" min="0" max="100" step="5" value="100">
+    </label>
+    <label>CPC opacity <output id="opacityOut">70%</output>
       <input type="range" id="opacity" min="0" max="100" step="5" value="70">
     </label>
   </section>

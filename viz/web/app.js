@@ -12,6 +12,7 @@
     mode: "overlay",
     mask: false,
     cdlVisible: true,
+    cdlOpacity: 1.0,
     dim: "white",
     opacity: 0.7,
     playing: false,
@@ -81,6 +82,7 @@
                            "?t=" + state.catalog.server_token +
                            (focus ? "&focus=" + focus + "&dim=" + dim : ""), {
       pane: "cdl", maxNativeZoom: 15, maxZoom: 15, noWrap: true,
+      opacity: state.cdlOpacity,
       usdaYear: state.cdlYear, usdaFocus: focus, usdaDim: dim,
       attribution: "USDA NASS Cropland Data Layer " + state.cdlYear
     }).addTo(map);
@@ -387,6 +389,11 @@
       } else {
         clearInterval(state.timer);
       }
+    });
+    el("cdlOpacity").addEventListener("input", function (e) {
+      state.cdlOpacity = Number(e.target.value) / 100;
+      el("cdlOpacityOut").textContent = e.target.value + "%";
+      if (cdlLayer) { cdlLayer.setOpacity(state.cdlOpacity); }
     });
     el("opacity").addEventListener("input", function (e) {
       state.opacity = Number(e.target.value) / 100;
