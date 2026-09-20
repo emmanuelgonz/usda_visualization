@@ -74,13 +74,29 @@ def _cached(key, z, x, y, render):
     return blob
 
 
-def render_cdl_tile(year, z, x, y):
-    """One CDL tile: nearest-neighbour warp, then the source palette."""
+def focus_palette(year, crop):
+    """The CDL palette with every class but this crop's greyed, cached per year and crop."""
+    key = f"{year}-f{crop}"
+    with _palette_lock:
+        lut = _palettes.get(key)
+    if lut is None:
+        codes = naming.CROP_CODES[crop]
+        lut = color.focus_lut(cdl_palette(year), tuple(codes["primary"]) + tuple(codes["double"]))
+        with _palette_lock:
+            _palettes[key] = lut
+    return lut
+
+
+def render_cdl_tile(year, z, x, y, focus=None):
+    """One CDL tile: nearest-neighbour warp, then the source or focused palette."""
+    key = f"cdl-{year}" + (f"-f{focus}" if focus else "")
+
     def render():
         codes = rasters.warp_tile(str(cdl_path(year)), z, x, y, resample="near")
-        return rasters.encode_png(color.colorize_thematic(codes, cdl_palette(year)))
+        lut = focus_palette(year, focus) if focus else cdl_palette(year)
+        return rasters.encode_png(color.colorize_thematic(codes, lut))
 
-    return _cached(f"cdl-{year}", z, x, y, render)
+    return _cached(key, z, x, y, render)
 
 
 def render_cpc_tile(crop, var, year, week, z, x, y, mask_year=None):
@@ -200,7 +216,7 @@ class Handler(BaseHTTPRequestHandler):
 
             match = TILE_CDL_RE.match(route)
             if match:
-                return self._handle_cdl_tile(match)
+                return self._handle_cdl_tile(match, query)
 
             match = TILE_CPC_RE.match(route)
             if match:
@@ -212,12 +228,15 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:  # a bad tile must not take the server down
             self._fail(HTTPStatus.INTERNAL_SERVER_ERROR, f"{type(exc).__name__}: {exc}")
 
-    def _handle_cdl_tile(self, match):
+    def _handle_cdl_tile(self, match, query):
         year = int(match.group("year"))
         if not cdl_path(year).is_file():
             return self._fail(HTTPStatus.NOT_FOUND, f"no CDL raster for {year}")
+        focus = query["focus"][0] if "focus" in query else None
+        if focus is not None and focus not in naming.CROPS:
+            return self._fail(HTTPStatus.NOT_FOUND, f"unknown crop {focus}")
         z, x, y = (int(match.group(k)) for k in ("z", "x", "y"))
-        self._send(render_cdl_tile(year, z, x, y), "image/png", cache=True)
+        self._send(render_cdl_tile(year, z, x, y, focus), "image/png", cache=True)
 
     def _handle_cpc_tile(self, match, query):
         crop = match.group("crop")

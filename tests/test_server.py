@@ -125,6 +125,19 @@ class TestTileRoutes(ServerTestCase):
         _, _, masked = self.get("/tiles/cpc/corn/cond/2024/30/" + self.zxy() + "?mask=2024")
         self.assertNotEqual(plain, masked)
 
+    def test_focused_cdl_tile_differs_and_is_cached_separately(self):
+        _, _, plain = self.get("/tiles/cdl/2024/" + self.zxy())
+        _, _, focused = self.get("/tiles/cdl/2024/" + self.zxy() + "?focus=soy")
+        self.assertEqual(_png_size(focused), (256, 256))
+        self.assertNotEqual(plain, focused)  # corn pixels greyed when soy is the focus
+        self.assertTrue(tileserver.cache_path("cdl-2024-fsoy", self.z, self.x, self.y).is_file())
+        self.assertTrue(tileserver.cache_path("cdl-2024", self.z, self.x, self.y).is_file())
+
+    def test_focus_on_unknown_crop_returns_404(self):
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.get("/tiles/cdl/2024/" + self.zxy() + "?focus=barley")
+        self.assertEqual(ctx.exception.code, 404)
+
     def test_second_request_is_served_from_the_disk_cache(self):
         self.get("/tiles/cdl/2024/" + self.zxy())
         cached = tileserver.cache_path("cdl-2024", self.z, self.x, self.y)
@@ -259,6 +272,12 @@ class TestInterfaceAssets(ServerTestCase):
         self.assertIn("LABEL_MAX_ZOOM", text)
         _, _, index = self.get("/")
         self.assertIn('id="states"', index.decode())
+
+    def test_app_sends_focus_only_under_the_mask(self):
+        _, _, body = self.get("/static/app.js")
+        text = body.decode()
+        self.assertIn("?focus=", text)
+        self.assertIn("state.mask", text[text.index("function drawCdl"):text.index("function drawCpc")])
 
     def test_index_loads_vendored_leaflet_not_a_cdn(self):
         _, _, body = self.get("/")

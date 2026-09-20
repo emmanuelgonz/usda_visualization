@@ -113,3 +113,23 @@ def legend_stops(var):
         {"value": value, "label": f"{int(value * 100)}%", "color": css(value)}
         for value in (0.0, 0.25, 0.5, 0.75, 1.0)
     ]
+
+
+def focus_lut(base_lut, keep_codes):
+    """Copy a palette, greying every class except keep_codes and class 0.
+
+    Grey is the Rec. 601 luminance of the original colour, so water stays
+    dark and developed land stays light while only the kept classes carry
+    hue. Alpha is preserved; class 0 stays transparent.
+    """
+    out = np.array(base_lut, dtype=np.uint8, copy=True)
+    keep = np.zeros(256, dtype=bool)
+    keep[list(keep_codes)] = True
+    keep[0] = True
+    rgb = out[:, :3].astype(np.float32)
+    luma = (0.299 * rgb[:, 0] + 0.587 * rgb[:, 1] + 0.114 * rgb[:, 2]).round().astype(np.uint8)
+    grey = ~keep
+    out[grey, 0] = luma[grey]
+    out[grey, 1] = luma[grey]
+    out[grey, 2] = luma[grey]
+    return out

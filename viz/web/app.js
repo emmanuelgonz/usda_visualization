@@ -61,12 +61,17 @@
   }
 
   function drawCdl() {
-    if (cdlLayer && cdlLayer.options.usdaYear === state.cdlYear) { return; }
+    // With the mask on, every CDL class except the selected crop's is greyed
+    // server-side so the crop's fields and the CPC cells are the only colour.
+    var focus = state.mask ? state.crop : null;
+    if (cdlLayer && cdlLayer.options.usdaYear === state.cdlYear &&
+        cdlLayer.options.usdaFocus === focus) { return; }
     if (cdlLayer) { map.removeLayer(cdlLayer); cdlLayer = null; }
     if (state.cdlYear === null || state.cdlYear === undefined) { return; }
-    cdlLayer = L.tileLayer("/tiles/cdl/" + state.cdlYear + "/{z}/{x}/{y}.png", {
+    cdlLayer = L.tileLayer("/tiles/cdl/" + state.cdlYear + "/{z}/{x}/{y}.png" +
+                           (focus ? "?focus=" + focus : ""), {
       pane: "cdl", maxNativeZoom: 15, maxZoom: 15, noWrap: true,
-      usdaYear: state.cdlYear,
+      usdaYear: state.cdlYear, usdaFocus: focus,
       attribution: "USDA NASS Cropland Data Layer " + state.cdlYear
     }).addTo(map);
   }
@@ -365,7 +370,7 @@
       if (cpcLayer && state.mode === "overlay") { cpcLayer.setOpacity(state.opacity); }
     });
     el("mask").addEventListener("change", function (e) {
-      state.mask = e.target.checked; drawCpc();
+      state.mask = e.target.checked; drawCdl(); drawCpc();
     });
     el("states").addEventListener("change", syncStates);
     map.on("zoomend", syncStates);
