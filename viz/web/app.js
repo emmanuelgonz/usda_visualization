@@ -19,7 +19,12 @@
     timer: null
   };
 
-  var map = L.map("map", { center: [39.5, -96.0], zoom: 4, minZoom: 3, maxZoom: 15 });
+  // Hardcoded so the first paint fits CONUS before the boundary file loads.
+  var CONUS_BOUNDS = L.latLngBounds([24.4, -125.0], [49.4, -66.9]);
+  var map = L.map("map", { minZoom: 3, maxZoom: 15, zoomSnap: 0.25 });
+  function fitConus() { map.fitBounds(CONUS_BOUNDS, { padding: [8, 8] }); }
+  fitConus();
+  window.addEventListener("resize", fitConus);
   map.createPane("cdl");
   map.createPane("cpc");
   map.createPane("states");

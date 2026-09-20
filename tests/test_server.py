@@ -334,6 +334,14 @@ class TestInterfaceAssets(ServerTestCase):
         text = app.decode()
         self.assertIn("state.cdlOpacity", text[text.index("function drawCdl"):text.index("function drawCpc")])
 
+    def test_map_fits_conus_on_load(self):
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        self.assertIn("CONUS_BOUNDS", text)
+        self.assertIn("fitBounds(CONUS_BOUNDS", text)
+        self.assertIn("zoomSnap: 0.25", text)
+        self.assertNotIn("center: [39.5, -96.0], zoom: 4", text)
+
     def test_index_loads_vendored_leaflet_not_a_cdn(self):
         _, _, body = self.get("/")
         text = body.decode()
