@@ -136,8 +136,20 @@ class TestTileRoutes(ServerTestCase):
         _, _, focused = self.get("/tiles/cdl/2024/" + self.zxy() + "?focus=soy")
         self.assertEqual(_png_size(focused), (256, 256))
         self.assertNotEqual(plain, focused)  # corn pixels greyed when soy is the focus
-        self.assertTrue(tileserver.cache_path("cdl-2024-fsoy", self.z, self.x, self.y).is_file())
+        self.assertTrue(tileserver.cache_path("cdl-2024-fsoy-white", self.z, self.x, self.y).is_file())
         self.assertTrue(tileserver.cache_path("cdl-2024", self.z, self.x, self.y).is_file())
+
+    def test_grey_and_white_focus_render_and_cache_separately(self):
+        _, _, white = self.get("/tiles/cdl/2024/" + self.zxy() + "?focus=soy&dim=white")
+        _, _, grey = self.get("/tiles/cdl/2024/" + self.zxy() + "?focus=soy&dim=grey")
+        self.assertNotEqual(white, grey)
+        self.assertTrue(tileserver.cache_path("cdl-2024-fsoy-white", self.z, self.x, self.y).is_file())
+        self.assertTrue(tileserver.cache_path("cdl-2024-fsoy-grey", self.z, self.x, self.y).is_file())
+
+    def test_unknown_dim_style_returns_404(self):
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.get("/tiles/cdl/2024/" + self.zxy() + "?focus=soy&dim=sepia")
+        self.assertEqual(ctx.exception.code, 404)
 
     def test_focus_on_unknown_crop_returns_404(self):
         with self.assertRaises(urllib.error.HTTPError) as ctx:
@@ -301,6 +313,15 @@ class TestInterfaceAssets(ServerTestCase):
         cpc = text[text.index("function drawCpc"):text.index("function applyMode")]
         self.assertIn("server_token", cdl)
         self.assertIn("server_token", cpc)
+
+    def test_off_crop_style_switch_exists(self):
+        _, _, index = self.get("/")
+        html = index.decode()
+        self.assertIn('name="dim"', html)
+        self.assertIn('value="white"', html)
+        self.assertIn('value="grey"', html)
+        _, _, app = self.get("/static/app.js")
+        self.assertIn("&dim=", app.decode())
 
     def test_index_loads_vendored_leaflet_not_a_cdn(self):
         _, _, body = self.get("/")

@@ -80,26 +80,26 @@ def _cached(key, z, x, y, render):
     return blob
 
 
-def focus_palette(year, crop):
-    """The CDL palette with every class but this crop's turned white, cached per year and crop."""
-    key = f"{year}-f{crop}"
+def focus_palette(year, crop, style):
+    """The CDL palette with every class but this crop's dimmed, cached per year, crop and style."""
+    key = f"{year}-f{crop}-{style}"
     with _palette_lock:
         lut = _palettes.get(key)
     if lut is None:
         codes = naming.CROP_CODES[crop]
-        lut = color.focus_lut(cdl_palette(year), tuple(codes["primary"]) + tuple(codes["double"]))
+        lut = color.focus_lut(cdl_palette(year), tuple(codes["primary"]) + tuple(codes["double"]), style)
         with _palette_lock:
             _palettes[key] = lut
     return lut
 
 
-def render_cdl_tile(year, z, x, y, focus=None):
+def render_cdl_tile(year, z, x, y, focus=None, style="white"):
     """One CDL tile: nearest-neighbour warp, then the source or focused palette."""
-    key = f"cdl-{year}" + (f"-f{focus}" if focus else "")
+    key = f"cdl-{year}" + (f"-f{focus}-{style}" if focus else "")
 
     def render():
         codes = rasters.warp_tile(str(cdl_path(year)), z, x, y, resample="near")
-        lut = focus_palette(year, focus) if focus else cdl_palette(year)
+        lut = focus_palette(year, focus, style) if focus else cdl_palette(year)
         return rasters.encode_png(color.colorize_thematic(codes, lut))
 
     return _cached(key, z, x, y, render)
@@ -243,8 +243,11 @@ class Handler(BaseHTTPRequestHandler):
         focus = query["focus"][0] if "focus" in query else None
         if focus is not None and focus not in naming.CROPS:
             return self._fail(HTTPStatus.NOT_FOUND, f"unknown crop {focus}")
+        style = query["dim"][0] if "dim" in query else "white"
+        if style not in color.FOCUS_STYLES:
+            return self._fail(HTTPStatus.NOT_FOUND, f"unknown dim style {style}")
         z, x, y = (int(match.group(k)) for k in ("z", "x", "y"))
-        self._send(render_cdl_tile(year, z, x, y, focus), "image/png", cache=True)
+        self._send(render_cdl_tile(year, z, x, y, focus, style), "image/png", cache=True)
 
     def _handle_cpc_tile(self, match, query):
         crop = match.group("crop")

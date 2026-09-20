@@ -118,15 +118,30 @@ class TestFocusLut(unittest.TestCase):
 
     def test_kept_codes_are_byte_identical(self):
         base = self._base()
-        out = color.focus_lut(base, (1, 225))
+        out = color.focus_lut(base, (1, 225), "white")
         np.testing.assert_array_equal(out[1], base[1])
         np.testing.assert_array_equal(out[225], base[225])
 
-    def test_other_codes_become_white_with_alpha_kept(self):
-        out = color.focus_lut(self._base(), (1,))
+    def test_white_style_turns_other_codes_white_with_alpha_kept(self):
+        out = color.focus_lut(self._base(), (1,), "white")
         for code in (5, 111):
             r, g, b, a = (int(v) for v in out[code])
             self.assertEqual((r, g, b, a), (255, 255, 255, 255), code)
+
+    def test_grey_style_turns_other_codes_luminance_grey(self):
+        out = color.focus_lut(self._base(), (1,), "grey")
+        r, g, b, a = (int(v) for v in out[5])
+        self.assertEqual(r, g); self.assertEqual(g, b); self.assertEqual(a, 255)
+        self.assertTrue(70 <= r <= 80, r)  # Rec. 601 luminance of (36, 110, 0)
+        self.assertLess(int(out[111][0]), int(out[5][0]) + 60)
+
+    def test_default_style_is_white(self):
+        np.testing.assert_array_equal(color.focus_lut(self._base(), (1,)),
+                                      color.focus_lut(self._base(), (1,), "white"))
+
+    def test_unknown_style_raises(self):
+        with self.assertRaises(ValueError):
+            color.focus_lut(self._base(), (1,), "sepia")
 
     def test_class_zero_stays_transparent(self):
         self.assertEqual(int(color.focus_lut(self._base(), (1,))[0, 3]), 0)

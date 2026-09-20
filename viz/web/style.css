@@ -15,7 +15,7 @@ html, body {
   color: var(--panel-fg);
 }
 
-#map { position: absolute; inset: 0 340px 0 0; background: #fff; }  /* shows when the CDL is hidden or masked out */
+#map { position: absolute; inset: 0 340px 0 0; background: #fff; }  /* app.js sets it to match the off-crop style */
 
 #panel {
   position: absolute;
@@ -94,3 +94,7 @@ output { font-variant-numeric: tabular-nums; font-weight: 450; color: var(--mute
   text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 3px #fff, 0 0 3px #fff;
   letter-spacing: 0.02em;
 }
+
+.sub { display: flex; gap: 10px; align-items: center; padding-left: 22px; color: var(--muted); }
+.sub label.inline { gap: 4px; }
+.sub.disabled { opacity: 0.5; }

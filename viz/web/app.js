@@ -12,6 +12,7 @@
     mode: "overlay",
     mask: false,
     cdlVisible: true,
+    dim: "white",
     opacity: 0.7,
     playing: false,
     timer: null
@@ -71,15 +72,16 @@
       if (cdlLayer) { map.removeLayer(cdlLayer); cdlLayer = null; }
       return;
     }
+    var dim = focus ? state.dim : null;
     if (cdlLayer && cdlLayer.options.usdaYear === state.cdlYear &&
-        cdlLayer.options.usdaFocus === focus) { return; }
+        cdlLayer.options.usdaFocus === focus && cdlLayer.options.usdaDim === dim) { return; }
     if (cdlLayer) { map.removeLayer(cdlLayer); cdlLayer = null; }
     if (state.cdlYear === null || state.cdlYear === undefined) { return; }
     cdlLayer = L.tileLayer("/tiles/cdl/" + state.cdlYear + "/{z}/{x}/{y}.png" +
                            "?t=" + state.catalog.server_token +
-                           (focus ? "&focus=" + focus : ""), {
+                           (focus ? "&focus=" + focus + "&dim=" + dim : ""), {
       pane: "cdl", maxNativeZoom: 15, maxZoom: 15, noWrap: true,
-      usdaYear: state.cdlYear, usdaFocus: focus,
+      usdaYear: state.cdlYear, usdaFocus: focus, usdaDim: dim,
       attribution: "USDA NASS Cropland Data Layer " + state.cdlYear
     }).addTo(map);
   }
@@ -236,6 +238,19 @@
       ? "Scale opacity by the fraction of each 9 km cell growing this crop"
       : "Masks are built for CDL 2024 and 2025 only";
     if (!available && state.mask) { state.mask = false; box.checked = false; }
+    syncDimControl();
+  }
+
+  function syncDimControl() {
+    var row = el("dimRow");
+    var active = state.mask && !el("mask").disabled;
+    row.classList.toggle("disabled", !active);
+    Array.prototype.forEach.call(document.getElementsByName("dim"), function (radio) {
+      radio.disabled = !active;
+    });
+    // The map background matches the off-crop colour so the area outside
+    // CONUS and the "CDL hidden" view read the same as the dimmed classes.
+    el("map").style.background = (state.mask && state.dim === "grey") ? "#e9e9e6" : "#fff";
   }
 
   function sparkline(series, domainLo, domainHi) {
@@ -382,7 +397,12 @@
       state.cdlVisible = e.target.checked; drawCdl();
     });
     el("mask").addEventListener("change", function (e) {
-      state.mask = e.target.checked; drawCdl(); drawCpc();
+      state.mask = e.target.checked; syncDimControl(); drawCdl(); drawCpc();
+    });
+    Array.prototype.forEach.call(document.getElementsByName("dim"), function (radio) {
+      radio.addEventListener("change", function (e) {
+        if (e.target.checked) { state.dim = e.target.value; syncDimControl(); drawCdl(); }
+      });
     });
     el("states").addEventListener("change", syncStates);
     map.on("zoomend", syncStates);

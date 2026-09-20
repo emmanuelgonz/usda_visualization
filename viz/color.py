@@ -115,16 +115,29 @@ def legend_stops(var):
     ]
 
 
-def focus_lut(base_lut, keep_codes):
-    """Copy a palette, turning every class except keep_codes and class 0 white.
+FOCUS_STYLES = ("white", "grey")
 
-    Only the kept classes carry colour, so with the crop mask on the crop's
-    own fields and the CPC cells are the only things on the map that are not
-    white. Alpha is preserved; class 0 stays transparent.
+
+def focus_lut(base_lut, keep_codes, style="white"):
+    """Copy a palette, dimming every class except keep_codes and class 0.
+
+    style "white" turns them pure white; "grey" replaces each with its
+    Rec. 601 luminance so water stays dark and developed land light. Either
+    way only the kept classes carry hue. Alpha is preserved; class 0 stays
+    transparent.
     """
+    if style not in FOCUS_STYLES:
+        raise ValueError(f"unknown focus style {style!r}; expected one of {FOCUS_STYLES}")
     out = np.array(base_lut, dtype=np.uint8, copy=True)
     keep = np.zeros(256, dtype=bool)
     keep[list(keep_codes)] = True
     keep[0] = True
-    out[~keep, :3] = 255
+    dim = ~keep
+    if style == "white":
+        out[dim, :3] = 255
+    else:
+        rgb = out[:, :3].astype(np.float32)
+        luma = (0.299 * rgb[:, 0] + 0.587 * rgb[:, 1] + 0.114 * rgb[:, 2]).round().astype(np.uint8)
+        for channel in range(3):
+            out[dim, channel] = luma[dim]
     return out
