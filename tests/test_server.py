@@ -418,6 +418,16 @@ class TestInterfaceAssets(ServerTestCase):
         self.assertIn("zoomSnap: 0.25", text)
         self.assertNotIn("center: [39.5, -96.0], zoom: 4", text)
 
+    def test_cpc_layer_is_recreated_not_reurled_on_week_change(self):
+        # Leaflet 1.9.4's GridLayer.redraw(), which setUrl triggers, does not
+        # round the map zoom; at a fractional zoom (zoomSnap 0.25) it requests
+        # tiles at z=4.75, the server 404s them, and the layer goes blank.
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        body = text[text.index("function drawCpc"):text.index("function applyMode")]
+        self.assertNotIn("setUrl(", body)
+        self.assertIn("map.removeLayer(cpcLayer)", body)
+
     def test_index_loads_vendored_leaflet_not_a_cdn(self):
         _, _, body = self.get("/")
         text = body.decode()

@@ -115,9 +115,11 @@
               "/" + state.week + "/{z}/{x}/{y}.png" +
               "?t=" + state.catalog.server_token +
               (state.mask ? "&mask=" + state.cdlYear : "");
-    if (cpcLayer) {
-      cpcLayer.setUrl(url);
-    } else {
+    // Recreate rather than swap the URL in place: Leaflet 1.9.4's redraw does not round
+    // the map zoom, so at a fractional zoom it requests tiles at z=4.75 and
+    // every one 404s. A new layer takes the rounding path and works.
+    if (cpcLayer) { map.removeLayer(cpcLayer); cpcLayer = null; }
+    {
       cpcLayer = L.tileLayer(url, {
         pane: "cpc", maxNativeZoom: 15, maxZoom: 15, noWrap: true,
         opacity: state.opacity,
