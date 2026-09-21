@@ -38,6 +38,9 @@ case "${1:-}" in
       echo "Leaflet or the state boundaries are not vendored; run ./run.sh vendor first" >&2
       exit 1
     fi
+    if [ ! -f data/emit/footprints.geojson ]; then
+      echo "note: no EMIT footprints (data/emit/footprints.geojson); the EMIT layer is off until ./run.sh emit is run" >&2
+    fi
     exec python3 -m viz.tileserver "$@"
     ;;
   # -t . keeps the repo root as the top-level import dir so `from viz import ...`

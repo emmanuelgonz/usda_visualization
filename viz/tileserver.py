@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, urlparse
 
 import numpy as np
 
-from viz import color, naming, paths, rasters
+from viz import color, emit, naming, paths, rasters
 
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -126,7 +126,7 @@ def render_cpc_tile(crop, var, year, week, z, x, y, mask_year=None):
     return _cached(key, z, x, y, render)
 
 
-def point_report(lon, lat, crop, year, cdl_year):
+def point_report(lon, lat, crop, year, cdl_year, week=None):
     """CDL class, crop-cover split, and the weekly CPC series at one location."""
     x5070, y5070 = rasters.lonlat_to_5070(lon, lat)
 
@@ -149,12 +149,16 @@ def point_report(lon, lat, crop, year, cdl_year):
     for var in naming.VARS:
         weeks = catalog.get("cpc", {}).get(crop, {}).get(var, {}).get(str(year), [])
         points = []
-        for week in weeks:
-            path = cpc_path(crop, var, year, week)
+        for cpc_week in weeks:
+            path = cpc_path(crop, var, year, cpc_week)
             if not path.is_file():
                 continue
-            points.append({"week": week, "value": rasters.sample_point(str(path), x5070, y5070)[0]})
+            points.append({"week": cpc_week, "value": rasters.sample_point(str(path), x5070, y5070)[0]})
         series[var] = points
+
+    index = emit.index_for(paths.EMIT_FOOTPRINTS)
+    granules = index.covering(lon, lat) if index else []
+    sunday = emit.week_sunday(year, week).isoformat() if week else None
 
     return {
         "lon": lon,
@@ -166,6 +170,8 @@ def point_report(lon, lat, crop, year, cdl_year):
         "cdl_class": classes.get(str(code)) if code is not None else None,
         "cover": cover,
         "series": series,
+        "emit": granules,
+        "week_sunday": sunday,
     }
 
 
@@ -217,7 +223,15 @@ class Handler(BaseHTTPRequestHandler):
                     return self._fail(HTTPStatus.NOT_FOUND, "catalog not built; run prepare")
                 catalog = json.loads(paths.CATALOG.read_text())
                 catalog["server_token"] = SERVER_TOKEN
+                index = emit.index_for(paths.EMIT_FOOTPRINTS)
+                catalog["emit_count"] = index.count if index else 0
+                catalog["emit_fetched"] = index.fetched if index else None
                 return self._send(json.dumps(catalog).encode(), CONTENT_TYPES[".json"])
+
+            if route == "/api/emit/footprints.geojson":
+                if not paths.EMIT_FOOTPRINTS.is_file():
+                    return self._fail(HTTPStatus.NOT_FOUND, "no EMIT footprints; run ./run.sh emit")
+                return self._send(paths.EMIT_FOOTPRINTS.read_bytes(), CONTENT_TYPES[".geojson"])
 
             if route == "/api/point":
                 return self._handle_point(query)
@@ -278,10 +292,11 @@ class Handler(BaseHTTPRequestHandler):
             lat = float(query["lat"][0])
             year = int(query["year"][0])
             cdl_year = int(query["cdl_year"][0])
+            week = int(query["week"][0]) if "week" in query else None
         except ValueError:
             return self._fail(HTTPStatus.BAD_REQUEST,
                                "lon, lat, year, cdl_year must be numeric")
-        report = point_report(lon, lat, query["crop"][0], year, cdl_year)
+        report = point_report(lon, lat, query["crop"][0], year, cdl_year, week)
         self._send(json.dumps(report).encode(), CONTENT_TYPES[".json"])
 
 

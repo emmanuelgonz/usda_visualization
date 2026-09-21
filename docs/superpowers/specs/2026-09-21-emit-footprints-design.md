@@ -58,7 +58,7 @@ granules cover a clicked point.
 | `viz/fetch_emit.py` | Pages CMR and writes `data/emit/footprints.geojson` |
 | `viz/emit.py` | Loads the footprints once and answers point-in-polygon queries |
 | `viz/tileserver.py` | Serves the footprints file; adds an `emit` array to `/api/point` |
-| `viz/prepare.py` | Records `emit_count` and `emit_fetched` in the catalog |
+| `viz/tileserver.py` | Computes `emit_count` and `emit_fetched` from the file at request time |
 | `viz/web/` | Footprint layer, two sliders, legend block, popup section |
 
 ### 4.1 Fetch
@@ -87,8 +87,9 @@ click are both in longitude and latitude; none crosses the antimeridian.
 `GET /api/emit/footprints.geojson` serves the file with the GeoJSON content type, or 404 with a
 message naming `./run.sh emit` when absent. `/api/point` gains `emit`, the array from Section 4.2,
 empty when the file is absent. `serve` warns on stderr when the file is missing rather than
-refusing, since the layer is optional. The catalog gains `emit_count` and `emit_fetched` (an ISO
-timestamp, or null) so the interface can enable the control only when data exists.
+refusing, since the layer is optional. The catalog route computes `emit_count` and `emit_fetched`
+(the file's modification time as an ISO timestamp, or null) from the file on each request, so a
+fresh `./run.sh emit` is visible without rerunning `prepare`.
 
 ### 4.4 Layer and controls
 

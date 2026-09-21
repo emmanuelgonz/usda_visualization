@@ -23,7 +23,7 @@ class ServerTestCase(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = Path(tempfile.mkdtemp())
         cls._saved = (paths.DATA, paths.CPC_DATA, paths.CDL_DATA, paths.MASK_DATA,
-                      paths.CATALOG, paths.TILE_CACHE)
+                      paths.CATALOG, paths.TILE_CACHE, paths.EMIT_FOOTPRINTS)
 
         paths.DATA = cls.tmp / "data"
         paths.CPC_DATA = paths.DATA / "cpc"
@@ -31,6 +31,7 @@ class ServerTestCase(unittest.TestCase):
         paths.MASK_DATA = paths.DATA / "masks"
         paths.CATALOG = paths.DATA / "catalog.json"
         paths.TILE_CACHE = cls.tmp / "cache" / "tiles"
+        paths.EMIT_FOOTPRINTS = paths.DATA / "emit" / "footprints.geojson"
 
         (paths.CPC_DATA / "corn" / "cond").mkdir(parents=True)
         paths.CDL_DATA.mkdir(parents=True)
@@ -52,6 +53,22 @@ class ServerTestCase(unittest.TestCase):
         cls.z, cls.x, cls.y = fixtures.tile_covering(paths.CDL_DATA / "2024_30m_cdls.tif")
         cls.lon, cls.lat = fixtures.fixture_lonlat(paths.CDL_DATA / "2024_30m_cdls.tif")
 
+        def square(lon, lat, half):
+            return [[lon - half, lat - half], [lon + half, lat - half], [lon + half, lat + half],
+                    [lon - half, lat + half], [lon - half, lat - half]]
+
+        def feature(fid, ring, start, cloud):
+            return {"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [ring]},
+                    "properties": {"id": fid, "start": start, "end": start, "cloud": cloud,
+                                   "year": int(start[:4]), "browse": "https://b/x.png", "data": None}}
+
+        paths.EMIT_FOOTPRINTS.parent.mkdir(parents=True)
+        paths.EMIT_FOOTPRINTS.write_text(json.dumps({"type": "FeatureCollection", "features": [
+            feature("near-old", square(cls.lon, cls.lat, 0.5), "2023-07-01T18:00:00Z", 12.0),
+            feature("near-new", square(cls.lon, cls.lat, 0.5), "2025-07-20T18:00:00Z", 40.0),
+            feature("far", square(cls.lon + 20, cls.lat, 0.5), "2024-07-01T18:00:00Z", 1.0),
+        ]}))
+
         cls.server = tileserver.make_server(0)
         cls.port = cls.server.server_address[1]
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
@@ -66,12 +83,16 @@ class ServerTestCase(unittest.TestCase):
         cls.server.shutdown()
         cls.server.server_close()
         (paths.DATA, paths.CPC_DATA, paths.CDL_DATA, paths.MASK_DATA,
-         paths.CATALOG, paths.TILE_CACHE) = cls._saved
+         paths.CATALOG, paths.TILE_CACHE, paths.EMIT_FOOTPRINTS) = cls._saved
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
     def get(self, path):
         with urllib.request.urlopen(f"http://127.0.0.1:{self.port}{path}", timeout=30) as r:
             return r.status, r.headers.get("Content-Type"), r.read()
+
+    def point_url(self):
+        return (f"/api/point?lon={self.lon:.6f}&lat={self.lat:.6f}"
+                "&crop=corn&year=2024&cdl_year=2024")
 
 
 class TestStaticRoutes(ServerTestCase):
@@ -200,10 +221,6 @@ class TestTileRoutes(ServerTestCase):
 
 
 class TestPointRoute(ServerTestCase):
-    def point_url(self):
-        return (f"/api/point?lon={self.lon:.6f}&lat={self.lat:.6f}"
-                "&crop=corn&year=2024&cdl_year=2024")
-
     def test_reports_cdl_class_and_crop_cover(self):
         status, ctype, body = self.get(self.point_url())
         self.assertEqual(status, 200)
@@ -239,6 +256,48 @@ class TestPointRoute(ServerTestCase):
         with self.assertRaises(urllib.error.HTTPError) as ctx:
             self.get("/api/point?lon=abc&lat=1&crop=corn&year=2024&cdl_year=2024")
         self.assertEqual(ctx.exception.code, 400)
+
+
+class TestEmitRoutes(ServerTestCase):
+    def test_footprints_are_served_as_geojson(self):
+        status, ctype, body = self.get("/api/emit/footprints.geojson")
+        self.assertEqual(status, 200)
+        self.assertIn("geo+json", ctype)
+        self.assertEqual(len(json.loads(body)["features"]), 3)
+
+    def test_catalog_reports_emit_count_and_fetched(self):
+        catalog = json.loads(self.get("/api/catalog")[2])
+        self.assertEqual(catalog["emit_count"], 3)
+        self.assertRegex(catalog["emit_fetched"], r"^\d{4}-\d{2}-\d{2}T")
+
+    def test_point_lists_covering_granules_newest_first(self):
+        report = json.loads(self.get(self.point_url())[2])
+        self.assertEqual([g["id"] for g in report["emit"]], ["near-new", "near-old"])
+        self.assertEqual(report["emit"][0]["cloud"], 40.0)
+
+    def test_point_far_from_footprints_has_empty_emit(self):
+        url = (f"/api/point?lon={self.lon + 40:.6f}&lat={self.lat:.6f}"
+               "&crop=corn&year=2024&cdl_year=2024")
+        self.assertEqual(json.loads(self.get(url)[2])["emit"], [])
+
+    def test_point_returns_week_sunday_when_week_given(self):
+        report = json.loads(self.get(self.point_url() + "&week=15")[2])
+        self.assertEqual(report["week_sunday"], "2024-04-14")
+
+    def test_point_without_week_has_null_week_sunday(self):
+        self.assertIsNone(json.loads(self.get(self.point_url())[2])["week_sunday"])
+
+    def test_missing_footprints_file_gives_404_and_empty_emit(self):
+        moved = paths.EMIT_FOOTPRINTS.with_name("moved.geojson")
+        paths.EMIT_FOOTPRINTS.rename(moved)
+        try:
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                self.get("/api/emit/footprints.geojson")
+            self.assertEqual(ctx.exception.code, 404)
+            self.assertEqual(json.loads(self.get(self.point_url())[2])["emit"], [])
+            self.assertEqual(json.loads(self.get("/api/catalog")[2])["emit_count"], 0)
+        finally:
+            moved.rename(paths.EMIT_FOOTPRINTS)
 
 
 class TestInterfaceAssets(ServerTestCase):
