@@ -12,7 +12,7 @@ from urllib.parse import parse_qs, urlparse
 
 import numpy as np
 
-from viz import color, emit, naming, paths, rasters
+from viz import coincidence, color, emit, naming, paths, rasters
 
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -158,6 +158,8 @@ def point_report(lon, lat, crop, year, cdl_year, week=None):
 
     index = emit.index_for(paths.EMIT_FOOTPRINTS)
     granules = index.covering(lon, lat) if index else []
+    eco_index = emit.index_for(paths.ECO_FOOTPRINTS)
+    eco_swaths = eco_index.covering(lon, lat) if eco_index else []
     sunday = None
     if week:
         try:
@@ -176,6 +178,7 @@ def point_report(lon, lat, crop, year, cdl_year, week=None):
         "cover": cover,
         "series": series,
         "emit": granules,
+        "eco": eco_swaths,
         "week_sunday": sunday,
     }
 
@@ -231,12 +234,23 @@ class Handler(BaseHTTPRequestHandler):
                 index = emit.index_for(paths.EMIT_FOOTPRINTS)
                 catalog["emit_count"] = index.count if index else 0
                 catalog["emit_fetched"] = index.fetched if index else None
+                eco_index = emit.index_for(paths.ECO_FOOTPRINTS)
+                catalog["eco_count"] = eco_index.count if eco_index else 0
+                catalog["eco_fetched"] = eco_index.fetched if eco_index else None
+                catalog["coincident_15min"] = index.count_where(
+                    lambda p: bool(p.get("eco")) and abs(p["eco"][0]["dt"]) <= coincidence.SAME_PASS
+                ) if index else 0
                 return self._send(json.dumps(catalog).encode(), CONTENT_TYPES[".json"])
 
             if route == "/api/emit/footprints.geojson":
                 if not paths.EMIT_FOOTPRINTS.is_file():
                     return self._fail(HTTPStatus.NOT_FOUND, "no EMIT footprints; run ./run.sh emit")
                 return self._send(paths.EMIT_FOOTPRINTS.read_bytes(), CONTENT_TYPES[".geojson"])
+
+            if route == "/api/eco/footprints.geojson":
+                if not paths.ECO_FOOTPRINTS.is_file():
+                    return self._fail(HTTPStatus.NOT_FOUND, "no ECOSTRESS footprints; run ./run.sh footprints")
+                return self._send(paths.ECO_FOOTPRINTS.read_bytes(), CONTENT_TYPES[".geojson"])
 
             if route == "/api/point":
                 return self._handle_point(query)

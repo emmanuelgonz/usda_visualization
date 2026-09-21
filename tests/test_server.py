@@ -25,7 +25,7 @@ class ServerTestCase(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = Path(tempfile.mkdtemp())
         cls._saved = (paths.DATA, paths.CPC_DATA, paths.CDL_DATA, paths.MASK_DATA,
-                      paths.CATALOG, paths.TILE_CACHE, paths.EMIT_FOOTPRINTS)
+                      paths.CATALOG, paths.TILE_CACHE, paths.EMIT_FOOTPRINTS, paths.ECO_FOOTPRINTS)
 
         paths.DATA = cls.tmp / "data"
         paths.CPC_DATA = paths.DATA / "cpc"
@@ -34,6 +34,7 @@ class ServerTestCase(unittest.TestCase):
         paths.CATALOG = paths.DATA / "catalog.json"
         paths.TILE_CACHE = cls.tmp / "cache" / "tiles"
         paths.EMIT_FOOTPRINTS = paths.DATA / "emit" / "footprints.geojson"
+        paths.ECO_FOOTPRINTS = paths.DATA / "eco" / "footprints.geojson"
 
         (paths.CPC_DATA / "corn" / "cond").mkdir(parents=True)
         paths.CDL_DATA.mkdir(parents=True)
@@ -71,6 +72,24 @@ class ServerTestCase(unittest.TestCase):
             feature("far", square(cls.lon + 20, cls.lat, 0.5), "2024-07-01T18:00:00Z", 1.0),
         ]}))
 
+        def eco_feature(fid, ring, start, daynight):
+            return {"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [ring]},
+                    "properties": {"id": fid, "start": start, "end": start, "daynight": daynight,
+                                   "year": int(start[:4]), "orbit": 1}}
+
+        paths.ECO_FOOTPRINTS.parent.mkdir(parents=True)
+        paths.ECO_FOOTPRINTS.write_text(json.dumps({"type": "FeatureCollection", "features": [
+            eco_feature("eco-day", square(cls.lon, cls.lat, 3.0), "2025-07-20T17:59:30Z", "DAY"),
+            eco_feature("eco-night", square(cls.lon, cls.lat, 3.0), "2025-07-21T05:00:00Z", "NIGHT"),
+            eco_feature("eco-far", square(cls.lon + 20, cls.lat, 3.0), "2025-07-20T18:00:00Z", "DAY"),
+        ]}))
+        # Attach coincidence pairs to the EMIT fixture the way ./run.sh footprints would.
+        from viz import coincidence
+        emit_doc = json.loads(paths.EMIT_FOOTPRINTS.read_text())
+        eco_doc = json.loads(paths.ECO_FOOTPRINTS.read_text())
+        coincidence.pair(emit_doc["features"], eco_doc["features"])
+        paths.EMIT_FOOTPRINTS.write_text(json.dumps(emit_doc))
+
         cls.server = tileserver.make_server(0)
         cls.port = cls.server.server_address[1]
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
@@ -85,7 +104,7 @@ class ServerTestCase(unittest.TestCase):
         cls.server.shutdown()
         cls.server.server_close()
         (paths.DATA, paths.CPC_DATA, paths.CDL_DATA, paths.MASK_DATA,
-         paths.CATALOG, paths.TILE_CACHE, paths.EMIT_FOOTPRINTS) = cls._saved
+         paths.CATALOG, paths.TILE_CACHE, paths.EMIT_FOOTPRINTS, paths.ECO_FOOTPRINTS) = cls._saved
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
     def get(self, path):
@@ -315,6 +334,45 @@ class TestEmitRoutes(ServerTestCase):
             self.assertEqual(json.loads(self.get("/api/catalog")[2])["emit_count"], 0)
         finally:
             moved.rename(paths.EMIT_FOOTPRINTS)
+
+
+class TestEcoRoutes(ServerTestCase):
+    def test_eco_footprints_are_served(self):
+        status, ctype, body = self.get("/api/eco/footprints.geojson")
+        self.assertEqual(status, 200)
+        self.assertIn("geo+json", ctype)
+        self.assertEqual(len(json.loads(body)["features"]), 3)
+
+    def test_catalog_reports_eco_fields(self):
+        catalog = json.loads(self.get("/api/catalog")[2])
+        self.assertEqual(catalog["eco_count"], 3)
+        self.assertRegex(catalog["eco_fetched"], r"^\d{4}-\d{2}-\d{2}T")
+        # near-new (2025-07-20T18:00:00Z) pairs with eco-day 30 s earlier.
+        self.assertEqual(catalog["coincident_15min"], 1)
+
+    def test_point_lists_covering_eco_swaths_newest_first(self):
+        report = json.loads(self.get(self.point_url())[2])
+        self.assertEqual([g["id"] for g in report["eco"]], ["eco-night", "eco-day"])
+        self.assertEqual(report["eco"][0]["daynight"], "NIGHT")
+
+    def test_emit_entries_carry_their_pairs(self):
+        report = json.loads(self.get(self.point_url())[2])
+        near_new = next(g for g in report["emit"] if g["id"] == "near-new")
+        self.assertEqual(near_new["eco"][0]["id"], "eco-day")
+        self.assertEqual(near_new["eco"][0]["dt"], -30)
+
+    def test_missing_eco_file_gives_404_and_zero_fields(self):
+        moved = paths.ECO_FOOTPRINTS.with_name("moved.geojson")
+        paths.ECO_FOOTPRINTS.rename(moved)
+        try:
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                self.get("/api/eco/footprints.geojson")
+            self.assertEqual(ctx.exception.code, 404)
+            catalog = json.loads(self.get("/api/catalog")[2])
+            self.assertEqual(catalog["eco_count"], 0)
+            self.assertEqual(json.loads(self.get(self.point_url())[2])["eco"], [])
+        finally:
+            moved.rename(paths.ECO_FOOTPRINTS)
 
 
 class TestInterfaceAssets(ServerTestCase):
