@@ -738,6 +738,24 @@ class TestInterfaceAssets(ServerTestCase):
         self.assertEqual(result.stdout.strip(),
                          "2025-07-20|2025-08-03|2025-03-31|2025-11-02|2025-07-27|2025-07-27|null")
 
+    def test_readout_lists_hls_acquisitions_and_tags_emit_scenes(self):
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        self.assertIn("HLS acquisitions", text)
+        self.assertIn("clear of", text)
+        self.assertIn("no clear HLS within", text)
+        self.assertIn("&start=", text)
+        self.assertIn("&window=", text)
+        self.assertIn("slice(0, 20)", text)
+        if not shutil.which("node"):
+            self.skipTest("node not available")
+        match = re.search(r"function formatDays\(dt\) \{.*?\n  \}", text, re.S)
+        self.assertIsNotNone(match, "formatDays function not found in app.js")
+        script = match.group(0) + "\nconsole.log([0, -2, 3, 1].map(formatDays).join(\"|\"));"
+        result = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "same day|−2 d|+3 d|+1 d")
+
 
 if __name__ == "__main__":
     unittest.main()

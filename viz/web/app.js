@@ -101,6 +101,11 @@
     return sign + Math.floor(totalM / 60) + " h " + (totalM % 60) + " m";
   }
 
+  function formatDays(dt) {
+    if (dt === 0) { return "same day"; }
+    return (dt < 0 ? "−" : "+") + Math.abs(dt) + " d";
+  }
+
   function stepLabel(step) {
     var m = COINCIDE_STEPS[step];
     return m < 60 ? m + " min" : (m / 60) + " h";
@@ -656,6 +661,10 @@
                (g.data ? ' <a href="' + g.data + '" target="_blank" rel="noopener">data</a>' : "") +
                (g.eco && g.eco.length && state.coincide && Math.abs(g.eco[0].dt) <= coincideSeconds()
                  ? ' <span class="eco-tag">ECOSTRESS ' + formatDt(g.eco[0].dt) + "</span>" : "") +
+               (g.hls
+                 ? ' <span class="eco-tag">HLS ' + g.hls.sensor + " " + formatDays(g.hls.dt) + ", " +
+                   (g.hls.cloud === null ? "?" : g.hls.cloud) + "% cloud</span>"
+                 : (report.hls ? ' <span class="eco-tag">no clear HLS within ±' + report.hls.window + " d</span>" : "")) +
                (inWin ? " <span>★</span>" : "") + "</li>";
       }).join("") + "</ul>";
       if (granules.length > shown.length) {
@@ -678,6 +687,31 @@
       if (swaths.length > shownE.length) {
         html += '<p class="note">and ' + (swaths.length - shownE.length) + " more</p>";
       }
+    }
+    var hlsBlock = report.hls;
+    if (hlsBlock) {
+      var totalAcq = 0, totalClear = 0;
+      hlsBlock.tiles.forEach(function (t) { totalAcq += t.acq.length; totalClear += t.clear; });
+      html += '<p class="section">HLS acquisitions, ' + hlsBlock.start + " to " + hlsBlock.end +
+              ": " + totalClear + " clear of " + totalAcq + "</p>";
+      if (!hlsBlock.tiles.length) {
+        html += '<p class="note">No MGRS tile ring covers this point.</p>';
+      }
+      hlsBlock.tiles.forEach(function (t) {
+        html += '<p class="note">' + t.tile + ": " + t.clear + " clear of " + t.acq.length + "</p>";
+        var shownH = t.acq.slice(0, 20);
+        html += '<ul class="emit-list">' + shownH.map(function (a) {
+          var clear = a.cloud !== null && a.cloud <= hlsBlock.cloud &&
+                      (hlsBlock.sensor === "ALL" || a.sensor === hlsBlock.sensor);
+          return "<li" + (clear ? ' class="in"' : "") + '><span class="when">' + a.date + "</span>" +
+                 "<span>" + a.sensor + "</span>" +
+                 "<span>" + (a.cloud === null ? "?" : a.cloud + "%") + " cloud</span>" +
+                 (clear ? " <span>✓</span>" : "") + "</li>";
+        }).join("") + "</ul>";
+        if (t.acq.length > shownH.length) {
+          html += '<p class="note">and ' + (t.acq.length - shownH.length) + " more</p>";
+        }
+      });
     }
     return html;
   }
@@ -843,10 +877,13 @@
         .setLatLng(e.latlng)
         .setContent('<p class="note">Reading…</p>')
         .openOn(map);
+      var range = hlsRange();
       var url = "/api/point?lon=" + e.latlng.lng.toFixed(6) +
                 "&lat=" + e.latlng.lat.toFixed(6) +
                 "&crop=" + state.crop + "&year=" + state.year + "&cdl_year=" + state.cdlYear +
-                (state.week !== null ? "&week=" + state.week : "");
+                (state.week !== null ? "&week=" + state.week : "") +
+                (range ? "&start=" + range.start + "&end=" + range.end : "") +
+                "&cloud=" + state.hlsCloud + "&sensor=" + state.hlsSensor + "&window=" + state.days;
       var popup = readoutPopup;
       fetch(url).then(function (r) { return r.json(); })
         .then(function (report) { if (popup.isOpen()) { popup.setContent(showReadout(report)); } })
