@@ -20,7 +20,12 @@
     emit: false,
     emitCloud: 30,
     emitWindow: 7,
-    emitOnlyWindow: false
+    emitOnlyWindow: false,
+    coincide: false,
+    coincideStep: 2,
+    coincideOnly: false,
+    eco: false,
+    ecoDay: "DAY"
   };
 
   // Hardcoded so the first paint fits CONUS before the boundary file loads.
@@ -45,6 +50,29 @@
   var EMIT_HIGHLIGHT = "#111111";
   var emitLayer = null;      // L.geoJSON over the whole file
   var emitLoaded = false;
+
+  map.createPane("eco");
+  map.getPane("eco").style.zIndex = 452;   // below EMIT, above CPC
+  var ecoRenderer = L.canvas({ pane: "eco" });
+  var ECO_COLOUR = "#5b6770";
+  var COINCIDE_STEPS = [1, 5, 15, 30, 60, 120, 360, 720, 1440];   // minutes
+  var ecoLayer = null;
+  var ecoLoaded = false;
+
+  function coincideSeconds() { return COINCIDE_STEPS[state.coincideStep] * 60; }
+
+  function formatDt(seconds) {
+    var sign = seconds < 0 ? "−" : "+";
+    var s = Math.abs(seconds);
+    if (s < 60) { return sign + s + " s"; }
+    if (s < 3600) { return sign + Math.round(s / 60) + " m"; }
+    return sign + Math.floor(s / 3600) + " h " + Math.round((s % 3600) / 60) + " m";
+  }
+
+  function stepLabel(step) {
+    var m = COINCIDE_STEPS[step];
+    return m < 60 ? m + " min" : (m / 60) + " h";
+  }
 
   // State names are shown below this zoom; above it one state fills the view.
   var LABEL_MAX_ZOOM = 9;
@@ -229,14 +257,20 @@
   }
 
   function emitStyleFor(bounds) {
+    var maxDt = coincideSeconds();
     return function (feature) {
       var p = feature.properties;
       var inWindow = !!(bounds && p._t >= bounds[0] && p._t <= bounds[1]);
+      var nearest = p.eco && p.eco.length ? p.eco[0].dt : null;
+      var coincident = state.coincide && nearest !== null && Math.abs(nearest) <= maxDt;
       var hidden = (p.cloud !== null && p.cloud > state.emitCloud) ||
-                   (state.emitOnlyWindow && bounds && !inWindow);
+                   (state.emitOnlyWindow && bounds && !inWindow) ||
+                   (state.coincide && state.coincideOnly && !coincident);
+      var yearColour = EMIT_YEAR_COLOURS[p.year] || "#666";
       return {
-        stroke: !hidden, fill: false, interactive: !hidden,
-        color: inWindow ? EMIT_HIGHLIGHT : (EMIT_YEAR_COLOURS[p.year] || "#666"),
+        stroke: !hidden, interactive: !hidden,
+        fill: coincident && !hidden, fillColor: yearColour, fillOpacity: (coincident && !hidden) ? 0.25 : 0,
+        color: inWindow ? EMIT_HIGHLIGHT : yearColour,
         weight: inWindow ? 2.5 : 1,
         opacity: inWindow ? 0.95 : (bounds ? 0.35 : 0.8)
       };
@@ -264,7 +298,62 @@
     var years = Object.keys(EMIT_YEAR_COLOURS).sort();
     el("emitLegend").innerHTML =
       years.map(function (y) { return '<span style="--swatch:' + EMIT_YEAR_COLOURS[y] + '">' + y + "</span>"; }).join("") +
-      '<span class="hl" style="--swatch:' + EMIT_HIGHLIGHT + '">within window</span>';
+      '<span class="hl" style="--swatch:' + EMIT_HIGHLIGHT + '">within window</span>' +
+      '<span class="hl" style="--swatch:#8b45d9">filled = ECOSTRESS coincident</span>';
+  }
+
+  function ecoStyleFor(bounds) {
+    return function (feature) {
+      var p = feature.properties;
+      var inWindow = !!(bounds && p._t >= bounds[0] && p._t <= bounds[1]);
+      var hidden = state.ecoDay !== "BOTH" && p.daynight !== state.ecoDay;
+      return {
+        stroke: !hidden, interactive: !hidden, fill: false,
+        color: inWindow ? EMIT_HIGHLIGHT : ECO_COLOUR,
+        dashArray: "4 4",
+        weight: inWindow ? 2.5 : 1,
+        opacity: inWindow ? 0.95 : (bounds ? 0.35 : 0.7)
+      };
+    };
+  }
+
+  function loadEco() {
+    if (ecoLoaded || !(state.catalog.eco_count > 0)) { return; }
+    ecoLoaded = true;
+    fetch("/api/eco/footprints.geojson").then(function (r) { return r.json(); }).then(function (geo) {
+      ecoLayer = L.geoJSON(geo, {
+        pane: "eco", renderer: ecoRenderer, style: ecoStyleFor(emitWindowBounds()),
+        onEachFeature: function (f, layer) {
+          var p = f.properties;
+          p._t = Date.parse(p.start);
+          layer.bindTooltip(p.start.slice(0, 10) + " " + p.start.slice(11, 16) + " UTC · " +
+                            (p.daynight || "?").toLowerCase() + " · bounding box",
+                            { sticky: true, className: "emit-tip" });
+        }
+      });
+      syncEco();
+    }).catch(function () { ecoLoaded = false; });
+  }
+
+  function drawEcoLegend() {
+    el("ecoLegend").innerHTML = "<span>ECOSTRESS swath, bounding box (≈550 km), not the true outline</span>";
+  }
+
+  function syncEco() {
+    var available = state.catalog.eco_count > 0;
+    var box = el("eco");
+    box.disabled = !available;
+    box.parentNode.title = available ? "" : "No ECOSTRESS footprints; run ./run.sh footprints";
+    el("ecoControls").classList.toggle("disabled", !(available && state.eco));
+    Array.prototype.forEach.call(document.getElementsByName("ecoDay"), function (radio) {
+      radio.disabled = !(available && state.eco);
+    });
+    if (!state.eco && ecoLayer && map.hasLayer(ecoLayer)) { map.removeLayer(ecoLayer); }
+    if (state.eco) {
+      if (!ecoLayer) { loadEco(); return; }
+      if (!map.hasLayer(ecoLayer)) { ecoLayer.addTo(map); }
+      ecoLayer.setStyle(ecoStyleFor(emitWindowBounds()));
+    }
   }
 
   function syncEmit() {
@@ -278,6 +367,11 @@
     var onlyOk = available && state.emit && state.emitWindow > 0;
     el("emitOnlyWindow").disabled = !onlyOk;
     if (!onlyOk && state.emitOnlyWindow) { state.emitOnlyWindow = false; el("emitOnlyWindow").checked = false; }
+    var coincideOk = available && state.emit && state.catalog.eco_count > 0;
+    el("coincide").disabled = !coincideOk;
+    el("coincideWindow").disabled = el("coincideOnly").disabled = !(coincideOk && state.coincide);
+    if (!coincideOk && state.coincide) { state.coincide = false; el("coincide").checked = false; }
+    if (!state.coincide && state.coincideOnly) { state.coincideOnly = false; el("coincideOnly").checked = false; }
     if (!state.emit && emitLayer && map.hasLayer(emitLayer)) { map.removeLayer(emitLayer); }
     if (state.emit) {
       if (!emitLayer) { loadEmit(); return; }
@@ -416,10 +510,29 @@
                "<span>" + (g.cloud === null ? "?" : g.cloud.toFixed(0) + "%") + " cloud</span>" +
                (g.browse ? ' <a href="' + g.browse + '" target="_blank" rel="noopener">browse</a>' : "") +
                (g.data ? ' <a href="' + g.data + '" target="_blank" rel="noopener">data</a>' : "") +
+               (g.eco && g.eco.length && state.coincide && Math.abs(g.eco[0].dt) <= coincideSeconds()
+                 ? ' <span class="eco-tag">ECOSTRESS ' + formatDt(g.eco[0].dt) + "</span>" : "") +
                (inWin ? " <span>★</span>" : "") + "</li>";
       }).join("") + "</ul>";
       if (granules.length > shown.length) {
         html += '<p class="note">and ' + (granules.length - shown.length) + " more</p>";
+      }
+    }
+    var swaths = report.eco || [];
+    html += '<p class="section">ECOSTRESS swaths covering this point: ' + swaths.length + "</p>";
+    if (swaths.length) {
+      var centreE = report.week_sunday ? Date.parse(report.week_sunday + "T00:00:00Z") : null;
+      var sortedE = swaths.slice().sort(function (a, b) {
+        if (centreE === null) { return Date.parse(b.start) - Date.parse(a.start); }
+        return Math.abs(Date.parse(a.start) - centreE) - Math.abs(Date.parse(b.start) - centreE);
+      });
+      var shownE = sortedE.slice(0, 10);
+      html += '<ul class="emit-list">' + shownE.map(function (s) {
+        return '<li><span class="when">' + s.start.slice(0, 10) + " " + s.start.slice(11, 16) + "</span>" +
+               "<span>" + (s.daynight || "?").toLowerCase() + "</span></li>";
+      }).join("") + "</ul>";
+      if (swaths.length > shownE.length) {
+        html += '<p class="note">and ' + (swaths.length - shownE.length) + " more</p>";
       }
     }
     return html;
@@ -432,6 +545,7 @@
     drawLegend();
     drawPairing();
     syncEmit();
+    syncEco();
     el("weekOut").textContent = state.week === null ? "no weeks" : "w" + pad(state.week);
   }
 
@@ -544,6 +658,17 @@
       el("emitWindowOut").textContent = e.target.value === "0" ? "off" : e.target.value;
       syncEmit();
     });
+    el("coincide").addEventListener("change", function (e) { state.coincide = e.target.checked; syncEmit(); });
+    el("coincideWindow").addEventListener("input", function (e) {
+      state.coincideStep = Number(e.target.value);
+      el("coincideWindowOut").textContent = stepLabel(state.coincideStep);
+      syncEmit();
+    });
+    el("coincideOnly").addEventListener("change", function (e) { state.coincideOnly = e.target.checked; syncEmit(); });
+    el("eco").addEventListener("change", function (e) { state.eco = e.target.checked; syncEco(); });
+    Array.prototype.forEach.call(document.getElementsByName("ecoDay"), function (radio) {
+      radio.addEventListener("change", function (e) { if (e.target.checked) { state.ecoDay = e.target.value; syncEco(); } });
+    });
     Array.prototype.forEach.call(document.getElementsByName("mode"), function (radio) {
       radio.addEventListener("change", function (e) {
         if (e.target.checked) { state.mode = e.target.value; applyMode(); }
@@ -576,6 +701,6 @@
     wire();
     refresh();
     loadStates();
-    drawEmitLegend(); syncEmit();
+    drawEmitLegend(); drawEcoLegend(); syncEmit(); syncEco();
   });
 })();

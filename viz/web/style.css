@@ -115,3 +115,14 @@ output { font-variant-numeric: tabular-nums; font-weight: 450; color: var(--mute
 .readout-popup .emit-list .when { font-variant-numeric: tabular-nums; }
 .readout-popup .emit-list .in { font-weight: 650; }
 .readout-popup .emit-list a { color: var(--accent); }
+
+/* ECOSTRESS swaths */
+#ecoControls { display: grid; gap: 7px; padding-left: 22px; }
+#ecoControls.disabled { opacity: 0.5; }
+#ecoLegend { font-size: 11px; color: var(--muted); }
+#ecoLegend span::before {
+  content: ""; display: inline-block; width: 14px; height: 0; margin-right: 4px;
+  border-top: 2px dashed #5b6770; vertical-align: middle;
+}
+.leaflet-eco-pane { cursor: default; }
+.readout-popup .emit-list .eco-tag { color: var(--muted); font-size: 11px; }

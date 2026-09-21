@@ -61,7 +61,21 @@
         <input type="range" id="emitWindow" min="0" max="30" step="1" value="7">
       </label>
       <label class="inline"><input type="checkbox" id="emitOnlyWindow"> Only scenes within window</label>
+      <label class="inline"><input type="checkbox" id="coincide"> Mark ECOSTRESS coincidence</label>
+      <label>Coincidence window <output id="coincideWindowOut">15 min</output>
+        <input type="range" id="coincideWindow" min="0" max="8" step="1" value="2">
+      </label>
+      <label class="inline"><input type="checkbox" id="coincideOnly"> Only coincident scenes</label>
       <div id="emitLegend"></div>
+    </div>
+    <label class="inline"><input type="checkbox" id="eco"> ECOSTRESS swaths</label>
+    <div class="sub" id="ecoControls">
+      <div class="inline">
+        <label class="inline"><input type="radio" name="ecoDay" value="DAY" checked> Day</label>
+        <label class="inline"><input type="radio" name="ecoDay" value="NIGHT"> Night</label>
+        <label class="inline"><input type="radio" name="ecoDay" value="BOTH"> Both</label>
+      </div>
+      <div id="ecoLegend"></div>
     </div>
     <label>CDL opacity <output id="cdlOpacityOut">100%</output>
       <input type="range" id="cdlOpacity" min="0" max="100" step="5" value="100">

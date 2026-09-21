@@ -494,6 +494,21 @@ class TestInterfaceAssets(ServerTestCase):
         body = text[text.index("function emitStyleFor"):text.index("function loadEmit")]
         self.assertIn("state.emitOnlyWindow", body)
 
+    def test_ecostress_layer_and_coincidence_controls(self):
+        _, _, index = self.get("/")
+        html = index.decode()
+        for ident in ('id="eco"', 'name="ecoDay"', 'id="coincide"', 'id="coincideWindow"',
+                      'id="coincideOnly"', 'id="ecoLegend"'):
+            self.assertIn(ident, html)
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        self.assertIn("/api/eco/footprints.geojson", text)
+        self.assertIn("COINCIDE_STEPS", text)
+        self.assertIn("[1, 5, 15, 30, 60, 120, 360, 720, 1440]", text)
+        self.assertIn('dashArray: "4 4"', text)
+        self.assertIn("fillOpacity", text[text.index("function emitStyleFor"):text.index("function loadEmit")])
+        self.assertIn("ECOSTRESS swaths covering this point", text)
+
     def test_index_loads_vendored_leaflet_not_a_cdn(self):
         _, _, body = self.get("/")
         text = body.decode()
