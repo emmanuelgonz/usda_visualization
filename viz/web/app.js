@@ -16,7 +16,10 @@
     dim: "white",
     opacity: 0.7,
     playing: false,
-    timer: null
+    timer: null,
+    emit: false,
+    emitCloud: 30,
+    emitWindow: 7
   };
 
   // Hardcoded so the first paint fits CONUS before the boundary file loads.
@@ -31,6 +34,16 @@
   map.getPane("cdl").style.zIndex = 400;
   map.getPane("cpc").style.zIndex = 450;
   map.getPane("states").style.zIndex = 460;
+
+  map.createPane("emit");
+  map.getPane("emit").style.zIndex = 455;   // above CPC, below state lines
+  var emitRenderer = L.canvas({ pane: "emit" });
+
+  // Validated categorical palette; fixed order, never cycled within the mission.
+  var EMIT_YEAR_COLOURS = { 2022: "#1c5cab", 2023: "#8b45d9", 2024: "#e0338e", 2025: "#00a3c4", 2026: "#b5651d" };
+  var EMIT_HIGHLIGHT = "#111111";
+  var emitLayer = null;      // L.geoJSON over the whole file
+  var emitLoaded = false;
 
   // State names are shown below this zoom; above it one state fills the view.
   var LABEL_MAX_ZOOM = 9;
@@ -197,6 +210,74 @@
     if (!showLabels && map.hasLayer(stateLabels)) { map.removeLayer(stateLabels); }
   }
 
+  // Sunday ending ISO week N. Mirrors viz/emit.py: 2024 week 15 -> 2024-04-14.
+  function weekSunday(year, week) {
+    var jan4 = new Date(Date.UTC(year, 0, 4));
+    var jan4Dow = jan4.getUTCDay() || 7;             // Monday=1 .. Sunday=7
+    var week1Monday = new Date(jan4.getTime() - (jan4Dow - 1) * 86400000);
+    return new Date(week1Monday.getTime() + ((week - 1) * 7 + 6) * 86400000);
+  }
+
+  function emitWindowBounds() {
+    if (!state.emitWindow || state.week === null) { return null; }
+    var centre = weekSunday(state.year, state.week).getTime();
+    var span = state.emitWindow * 86400000;
+    return [centre - span, centre + span];
+  }
+
+  function emitStyleFor(bounds) {
+    return function (feature) {
+      var p = feature.properties;
+      var hidden = p.cloud !== null && p.cloud > state.emitCloud;
+      var inWindow = !!(bounds && p._t >= bounds[0] && p._t <= bounds[1]);
+      return {
+        stroke: !hidden, fill: false, interactive: !hidden,
+        color: inWindow ? EMIT_HIGHLIGHT : (EMIT_YEAR_COLOURS[p.year] || "#666"),
+        weight: inWindow ? 2.5 : 1,
+        opacity: inWindow ? 0.95 : (bounds ? 0.35 : 0.8)
+      };
+    };
+  }
+
+  function loadEmit() {
+    if (emitLoaded || !(state.catalog.emit_count > 0)) { return; }
+    emitLoaded = true;
+    fetch("/api/emit/footprints.geojson").then(function (r) { return r.json(); }).then(function (geo) {
+      emitLayer = L.geoJSON(geo, {
+        pane: "emit", renderer: emitRenderer, style: emitStyleFor(emitWindowBounds()),
+        onEachFeature: function (f, layer) {
+          var p = f.properties;
+          f.properties._t = Date.parse(f.properties.start);
+          layer.bindTooltip(p.start.slice(0, 10) + " · " + (p.cloud === null ? "?" : p.cloud + "%") + " cloud",
+                            { sticky: true, className: "emit-tip" });
+        }
+      });
+      syncEmit();
+    }).catch(function () { emitLoaded = false; });
+  }
+
+  function drawEmitLegend() {
+    var years = Object.keys(EMIT_YEAR_COLOURS).sort();
+    el("emitLegend").innerHTML =
+      years.map(function (y) { return '<span style="--swatch:' + EMIT_YEAR_COLOURS[y] + '">' + y + "</span>"; }).join("") +
+      '<span class="hl" style="--swatch:' + EMIT_HIGHLIGHT + '">within window</span>';
+  }
+
+  function syncEmit() {
+    var available = state.catalog.emit_count > 0;
+    var box = el("emit");
+    box.disabled = !available;
+    box.parentNode.title = available ? "" : "No EMIT footprints; run ./run.sh emit";
+    el("emitControls").classList.toggle("disabled", !(available && state.emit));
+    el("emitCloud").disabled = el("emitWindow").disabled = !(available && state.emit);
+    if (!state.emit && emitLayer && map.hasLayer(emitLayer)) { map.removeLayer(emitLayer); }
+    if (state.emit) {
+      if (!emitLayer) { loadEmit(); return; }
+      if (!map.hasLayer(emitLayer)) { emitLayer.addTo(map); }
+      emitLayer.setStyle(emitStyleFor(emitWindowBounds()));
+    }
+  }
+
   function drawLegend() {
     var stops = state.var === "cond"
       ? [{ v: 1, l: "Very poor" }, { v: 2, l: "Poor" }, { v: 3, l: "Fair" },
@@ -309,6 +390,30 @@
       html += '<p class="note">Condition, weeks ' + state.year + "</p>" + sparkline(cond, 1, 5) +
               '<p class="note">Progress, weeks ' + state.year + "</p>" + sparkline(prog, 0, 1);
     }
+
+    var granules = report.emit || [];
+    html += '<p class="section">EMIT scenes covering this point: ' + granules.length + "</p>";
+    if (granules.length) {
+      var centre = report.week_sunday ? Date.parse(report.week_sunday + "T00:00:00Z") : null;
+      var bounds = emitWindowBounds();
+      var sorted = granules.slice().sort(function (a, b) {
+        if (centre === null) { return Date.parse(b.start) - Date.parse(a.start); }
+        return Math.abs(Date.parse(a.start) - centre) - Math.abs(Date.parse(b.start) - centre);
+      });
+      var shown = sorted.slice(0, 15);
+      html += '<ul class="emit-list">' + shown.map(function (g) {
+        var t = Date.parse(g.start);
+        var inWin = bounds && t >= bounds[0] && t <= bounds[1];
+        return "<li" + (inWin ? ' class="in"' : "") + '><span class="when">' + g.start.slice(0, 10) + "</span>" +
+               "<span>" + (g.cloud === null ? "?" : g.cloud.toFixed(0) + "%") + " cloud</span>" +
+               (g.browse ? ' <a href="' + g.browse + '" target="_blank" rel="noopener">browse</a>' : "") +
+               (g.data ? ' <a href="' + g.data + '" target="_blank" rel="noopener">data</a>' : "") +
+               (inWin ? " <span>★</span>" : "") + "</li>";
+      }).join("") + "</ul>";
+      if (granules.length > shown.length) {
+        html += '<p class="note">and ' + (granules.length - shown.length) + " more</p>";
+      }
+    }
     return html;
   }
 
@@ -318,6 +423,7 @@
     drawCpc();
     drawLegend();
     drawPairing();
+    syncEmit();
     el("weekOut").textContent = state.week === null ? "no weeks" : "w" + pad(state.week);
   }
 
@@ -418,6 +524,15 @@
     });
     el("states").addEventListener("change", syncStates);
     map.on("zoomend", syncStates);
+    el("emit").addEventListener("change", function (e) { state.emit = e.target.checked; syncEmit(); });
+    el("emitCloud").addEventListener("input", function (e) {
+      state.emitCloud = Number(e.target.value); el("emitCloudOut").textContent = e.target.value + "%"; syncEmit();
+    });
+    el("emitWindow").addEventListener("input", function (e) {
+      state.emitWindow = Number(e.target.value);
+      el("emitWindowOut").textContent = e.target.value === "0" ? "off" : e.target.value;
+      syncEmit();
+    });
     Array.prototype.forEach.call(document.getElementsByName("mode"), function (radio) {
       radio.addEventListener("change", function (e) {
         if (e.target.checked) { state.mode = e.target.value; applyMode(); }
@@ -431,7 +546,8 @@
         .openOn(map);
       var url = "/api/point?lon=" + e.latlng.lng.toFixed(6) +
                 "&lat=" + e.latlng.lat.toFixed(6) +
-                "&crop=" + state.crop + "&year=" + state.year + "&cdl_year=" + state.cdlYear;
+                "&crop=" + state.crop + "&year=" + state.year + "&cdl_year=" + state.cdlYear +
+                (state.week !== null ? "&week=" + state.week : "");
       var popup = readoutPopup;
       fetch(url).then(function (r) { return r.json(); })
         .then(function (report) { if (popup.isOpen()) { popup.setContent(showReadout(report)); } })
@@ -449,5 +565,6 @@
     wire();
     refresh();
     loadStates();
+    drawEmitLegend(); syncEmit();
   });
 })();

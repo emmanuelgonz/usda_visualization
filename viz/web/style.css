@@ -98,3 +98,20 @@ output { font-variant-numeric: tabular-nums; font-weight: 450; color: var(--mute
 .sub { display: flex; gap: 10px; align-items: center; padding-left: 22px; color: var(--muted); }
 .sub label.inline { gap: 4px; }
 .sub.disabled { opacity: 0.5; }
+
+/* EMIT footprints */
+#emitControls { display: grid; gap: 7px; padding-left: 22px; }
+#emitControls.disabled { opacity: 0.5; }
+#emitLegend { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 11px; color: var(--muted); }
+#emitLegend span::before {
+  content: ""; display: inline-block; width: 14px; height: 0; margin-right: 4px;
+  border-top: 2px solid var(--swatch); vertical-align: middle;
+}
+#emitLegend span.hl::before { border-top-width: 3px; }
+.leaflet-emit-pane { cursor: default; }
+.emit-tip { font-size: 11px; }
+.readout-popup .emit-list { margin: 4px 0 0; padding: 0; list-style: none; }
+.readout-popup .emit-list li { display: flex; gap: 6px; align-items: baseline; padding: 1px 0; }
+.readout-popup .emit-list .when { font-variant-numeric: tabular-nums; }
+.readout-popup .emit-list .in { font-weight: 650; }
+.readout-popup .emit-list a { color: var(--accent); }
