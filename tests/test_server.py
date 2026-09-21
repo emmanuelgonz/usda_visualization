@@ -563,6 +563,19 @@ class TestInterfaceAssets(ServerTestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "2024-04-14")
 
+    def test_format_dt_rounds_to_whole_minutes_before_splitting_hours(self):
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        if not shutil.which("node"):
+            self.skipTest("node not available")
+        match = re.search(r"function formatDt\(seconds\) \{.*?\n  \}", text, re.S)
+        self.assertIsNotNone(match, "formatDt function not found in app.js")
+        script = (match.group(0) +
+                  "\nconsole.log([7199, 3599, -41, 45, 86400].map(formatDt).join(\"|\"));")
+        result = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "+2 h 0 m|+1 h 0 m|−41 s|+45 s|+24 h 0 m")
+
 
 if __name__ == "__main__":
     unittest.main()
