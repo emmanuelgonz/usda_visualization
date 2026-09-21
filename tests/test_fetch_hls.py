@@ -77,6 +77,28 @@ class TestFetchMonth(unittest.TestCase):
         self.assertEqual(fetch_hls.fetch_month("HLSL30", "2022-01", fetch_fn=fake), [])
         self.assertEqual(len(asked), 1)
 
+    def test_missing_cmr_hits_header_raises_before_any_rows_are_returned(self):
+        asked = []
+
+        def fake(url):
+            asked.append(url)
+            return HEADER.encode(), {}
+
+        with self.assertRaises(ValueError):
+            fetch_hls.fetch_month("HLSS30", "2025-07", fetch_fn=fake)
+        self.assertEqual(len(asked), 1)
+
+    def test_non_numeric_cmr_hits_header_raises_before_any_rows_are_returned(self):
+        asked = []
+
+        def fake(url):
+            asked.append(url)
+            return HEADER.encode(), {"CMR-Hits": "N/A"}
+
+        with self.assertRaises(ValueError):
+            fetch_hls.fetch_month("HLSS30", "2025-07", fetch_fn=fake)
+        self.assertEqual(len(asked), 1)
+
 
 class TestFetchRing(unittest.TestCase):
     def test_takes_the_first_polygon_from_the_first_collection_that_has_one(self):

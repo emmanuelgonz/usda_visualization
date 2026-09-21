@@ -44,9 +44,17 @@ def now_iso():
 
 
 def fetch_month(short_name, month, fetch_fn=cmr.fetch_response):
-    """Every row of one collection-month, paged by CMR-Hits, limited to the month's dates."""
-    body, headers = fetch_fn(csv_url(short_name, month, 1))
-    hits = int(headers.get("CMR-Hits") or 0)
+    """Every row of one collection-month, paged by CMR-Hits, limited to the month's dates.
+
+    Raises ValueError if the response has no usable CMR-Hits header, so a
+    malformed response never gets recorded as a completed fetch.
+    """
+    url = csv_url(short_name, month, 1)
+    body, headers = fetch_fn(url)
+    try:
+        hits = int(headers.get("CMR-Hits"))
+    except (TypeError, ValueError):
+        raise ValueError(f"no CMR-Hits header in the response for {url}") from None
     rows = hls.parse_csv(body.decode("utf-8"))
     pages = -(-hits // cmr.PAGE_SIZE)
     for page in range(2, pages + 1):
