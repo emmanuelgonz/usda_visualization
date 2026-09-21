@@ -72,6 +72,7 @@ class ServerTestCase(unittest.TestCase):
             feature("near-old", square(cls.lon, cls.lat, 0.5), "2023-07-01T18:00:00Z", 12.0),
             feature("near-new", square(cls.lon, cls.lat, 0.5), "2025-07-20T18:00:00Z", 40.0),
             feature("far", square(cls.lon + 20, cls.lat, 0.5), "2024-07-01T18:00:00Z", 1.0),
+            feature("no-tile", square(cls.lon + 10, cls.lat, 0.5), "2025-07-20T18:00:00Z", 5.0),
         ]}))
 
         def eco_feature(fid, ring, start, daynight):
@@ -307,11 +308,11 @@ class TestEmitRoutes(ServerTestCase):
         status, ctype, body = self.get("/api/emit/footprints.geojson")
         self.assertEqual(status, 200)
         self.assertIn("geo+json", ctype)
-        self.assertEqual(len(json.loads(body)["features"]), 3)
+        self.assertEqual(len(json.loads(body)["features"]), 4)
 
     def test_catalog_reports_emit_count_and_fetched(self):
         catalog = json.loads(self.get("/api/catalog")[2])
-        self.assertEqual(catalog["emit_count"], 3)
+        self.assertEqual(catalog["emit_count"], 4)
         self.assertRegex(catalog["emit_fetched"], r"^\d{4}-\d{2}-\d{2}T")
 
     def test_point_lists_covering_granules_newest_first(self):
@@ -431,6 +432,7 @@ class TestHlsRoutes(ServerTestCase):
         self.assertEqual(catalog["hls_count"], 4)
         self.assertEqual(catalog["hls_tiles"], 2)
         self.assertEqual(catalog["hls_fetched"], "2025-08-02T00:00:00+00:00")
+        self.assertFalse(catalog["hls_busy"])
 
     def test_point_lists_covering_tiles_with_clear_counts(self):
         report = json.loads(self.get(self.point_url() + self.HLS_QUERY)[2])
@@ -461,6 +463,30 @@ class TestHlsRoutes(ServerTestCase):
         self.assertEqual((report["hls"]["start"], report["hls"]["end"]), ("2024-07-21", "2024-08-04"))
         self.assertEqual(report["hls"]["tiles"][0]["acq"], [])
 
+    def test_point_outside_every_tile_ring_leaves_emit_scenes_untagged(self):
+        # No covering tile means nothing is known about the HLS record here, which
+        # is not the same as a covering tile holding no clear acquisition.
+        url = (f"/api/point?lon={self.lon + 10:.6f}&lat={self.lat:.6f}"
+               "&crop=corn&year=2024&cdl_year=2024" + self.HLS_QUERY)
+        report = json.loads(self.get(url)[2])
+        self.assertEqual(report["hls"]["tiles"], [])
+        self.assertEqual([g["id"] for g in report["emit"]], ["no-tile"])
+        for g in report["emit"]:
+            self.assertNotIn("hls", g)
+
+    def test_point_without_a_week_has_a_null_range_but_still_tags_scenes(self):
+        # No week and no explicit range: the listing has nothing to bound, while
+        # the per-scene tags run over each scene's own date.
+        report = json.loads(self.get(self.point_url())[2])
+        block = report["hls"]
+        self.assertEqual((block["start"], block["end"]), (None, None))
+        self.assertEqual([t["tile"] for t in block["tiles"]], ["T99ZZZ"])
+        self.assertEqual(block["tiles"][0], {"tile": "T99ZZZ", "clear": 0, "acq": []})
+        by_id = {g["id"]: g for g in report["emit"]}
+        self.assertEqual(by_id["near-new"]["hls"],
+                         {"date": "2025-07-18", "sensor": "S30", "cloud": 10, "dt": -2})
+        self.assertIsNone(by_id["near-old"]["hls"])
+
     def test_missing_store_gives_404_null_block_and_zero_fields(self):
         # A tagged request first: if hls_block wrote onto the FootprintIndex's own
         # dicts, the tag would survive into the no-store response below.
@@ -480,8 +506,42 @@ class TestHlsRoutes(ServerTestCase):
                 self.assertNotIn("hls", g)
             catalog = json.loads(self.get("/api/catalog")[2])
             self.assertEqual((catalog["hls_count"], catalog["hls_tiles"], catalog["hls_fetched"]), (0, 0, None))
+            self.assertFalse(catalog["hls_busy"])   # absent is not busy
         finally:
             moved.rename(paths.HLS_DB)
+
+
+class TestHlsBusyStore(ServerTestCase):
+    """A fetch holding the write lock degrades every HLS read; nothing returns 500."""
+
+    HLS_QUERY = "&start=2025-07-15&end=2025-07-31&cloud=30&sensor=ALL&window=7"
+
+    def test_a_locked_store_degrades_the_catalog_the_routes_and_the_point(self):
+        import sqlite3
+        writer = sqlite3.connect(str(paths.HLS_DB), timeout=0.1)
+        self.addCleanup(writer.close)
+        writer.execute("BEGIN EXCLUSIVE")
+        try:
+            catalog = json.loads(self.get("/api/catalog")[2])
+            self.assertTrue(catalog["hls_busy"])
+            self.assertEqual((catalog["hls_count"], catalog["hls_tiles"], catalog["hls_fetched"]),
+                             (0, 0, None))
+            for route in ("/api/hls/tiles.geojson",
+                          "/api/hls/counts?start=2025-07-15&end=2025-07-31&cloud=30&sensor=ALL"):
+                with self.subTest(route=route), self.assertRaises(urllib.error.HTTPError) as ctx:
+                    self.get(route)
+                self.assertEqual(ctx.exception.code, 503)
+                self.assertIn("HLS store busy; a fetch is in progress, retry shortly",
+                              ctx.exception.read().decode())
+            report = json.loads(self.get(self.point_url() + self.HLS_QUERY)[2])
+            self.assertIsNone(report["hls"])
+            for g in report["emit"]:
+                self.assertNotIn("hls", g)
+        finally:
+            writer.rollback()
+        catalog = json.loads(self.get("/api/catalog")[2])
+        self.assertFalse(catalog["hls_busy"])
+        self.assertEqual((catalog["hls_count"], catalog["hls_tiles"]), (4, 2))
 
 
 class TestInterfaceAssets(ServerTestCase):
@@ -737,6 +797,24 @@ class TestInterfaceAssets(ServerTestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(),
                          "2025-07-20|2025-08-03|2025-03-31|2025-11-02|2025-07-27|2025-07-27|null")
+
+    def test_catalog_boot_fetch_reports_a_failed_request(self):
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        boot = text[text.index('fetch("/api/catalog")'):]
+        self.assertIn(".catch(", boot)
+        self.assertIn("Catalog request failed; is the server running? Reload to retry.", boot)
+        self.assertIn("hls_busy", text)
+
+    def test_hls_layer_is_gated_on_tile_rings_as_well_as_rows(self):
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        body = text[text.index("function loadHls"):text.index("function syncEco")]
+        self.assertIn("hls_tiles", body)
+        self.assertIn("HLS tile rings not fetched yet; let ./run.sh hls finish.", body)
+        self.assertIn("HLS store busy; a fetch is in progress. Reload when it finishes.", body)
+        self.assertIn("g.hls === null", text)
+        self.assertIn("no week selected", text)
 
     def test_readout_lists_hls_acquisitions_and_tags_emit_scenes(self):
         _, _, app = self.get("/static/app.js")

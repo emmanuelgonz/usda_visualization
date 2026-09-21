@@ -439,7 +439,7 @@
   }
 
   function loadHls() {
-    if (hlsLoaded || !(state.catalog.hls_count > 0)) { return; }
+    if (hlsLoaded || !(state.catalog.hls_count > 0 && state.catalog.hls_tiles > 0)) { return; }
     hlsLoaded = true;
     fetch("/api/hls/tiles.geojson").then(function (r) { return r.json(); }).then(function (geo) {
       hlsLayer = L.geoJSON(geo, {
@@ -465,10 +465,16 @@
   }
 
   function syncHls() {
-    var available = state.catalog.hls_count > 0;
+    // Rows without rings colour nothing, and a running fetch holds the store's
+    // write lock, so both leave the layer off with the reason on the label.
+    var busy = !!state.catalog.hls_busy;
+    var available = !busy && state.catalog.hls_count > 0 && state.catalog.hls_tiles > 0;
     var box = el("hls");
     box.disabled = !available;
-    box.parentNode.title = available ? "" : "No HLS store; run ./run.sh hls";
+    box.parentNode.title = available ? ""
+      : busy ? "HLS store busy; a fetch is in progress. Reload when it finishes."
+      : state.catalog.hls_count > 0 ? "HLS tile rings not fetched yet; let ./run.sh hls finish."
+      : "No HLS store; run ./run.sh hls";
     if (!available && state.hls) { state.hls = false; box.checked = false; }
     var active = available && state.hls;
     el("hlsControls").classList.toggle("disabled", !active);
@@ -664,7 +670,7 @@
                (g.hls
                  ? ' <span class="eco-tag">HLS ' + g.hls.sensor + " " + formatDays(g.hls.dt) + ", " +
                    (g.hls.cloud === null ? "?" : g.hls.cloud) + "% cloud</span>"
-                 : (report.hls ? ' <span class="eco-tag">no clear HLS within ±' + report.hls.window + " d</span>" : "")) +
+                 : (g.hls === null ? ' <span class="eco-tag">no clear HLS within ±' + report.hls.window + " d</span>" : "")) +
                (inWin ? " <span>★</span>" : "") + "</li>";
       }).join("") + "</ul>";
       if (granules.length > shown.length) {
@@ -692,7 +698,8 @@
     if (hlsBlock) {
       var totalAcq = 0, totalClear = 0;
       hlsBlock.tiles.forEach(function (t) { totalAcq += t.acq.length; totalClear += t.clear; });
-      html += '<p class="section">HLS acquisitions, ' + hlsBlock.start + " to " + hlsBlock.end +
+      html += '<p class="section">HLS acquisitions, ' +
+              (hlsBlock.start ? hlsBlock.start + " to " + hlsBlock.end : "no week selected") +
               ": " + totalClear + " clear of " + totalAcq + "</p>";
       if (!hlsBlock.tiles.length) {
         html += '<p class="note">No MGRS tile ring covers this point.</p>';
@@ -902,5 +909,7 @@
     refresh();
     loadStates();
     drawEmitLegend(); drawEcoLegend(); drawHlsLegend(); syncEmit(); syncEco(); syncHls();
+  }).catch(function () {
+    el("pairing").textContent = "Catalog request failed; is the server running? Reload to retry.";
   });
 })();

@@ -32,6 +32,7 @@ TILE_CPC_RE = re.compile(
 )
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 HLS_SENSORS = ("ALL", "L30", "S30")
+HLS_BUSY = "HLS store busy; a fetch is in progress, retry shortly"
 
 # Changes on every server start. The interface appends it to tile URLs so the
 # browser's HTTP cache is invalidated whenever the server (and so any palette
@@ -129,15 +130,38 @@ def render_cpc_tile(crop, var, year, week, z, x, y, mask_year=None):
     return _cached(key, z, x, y, render)
 
 
+def hls_read(work=None):
+    """(value, busy) for one read of this thread's HLS store, degraded instead of raised.
+
+    work(entry) runs against the (Store, TileIndex) pair and defaults to
+    returning the pair itself, so a route can look for the store before it
+    validates parameters. value is None when the store is absent or locked, and
+    busy tells those apart: a fetch committing a month holds the write lock, so
+    the read-only connection gives up after half a second and raises hls.BUSY.
+    """
+    try:
+        entry = hls.store_for(paths.HLS_DB)
+        if entry is None:
+            return None, False
+        return (entry if work is None else work(entry)), False
+    except hls.BUSY:
+        return None, True
+
+
 def hls_block(lon, lat, tile_index, store, granules, start, end, cloud, sensor, window):
     """The point's HLS tiles over [start, end], and a nearest-clear tag on each EMIT granule.
 
     granules are copies, never the index's own dicts, so the tag does not
-    poison the shared FootprintIndex.
+    poison the shared FootprintIndex. A granule's "hls" key is absent when no
+    tile ring covers the point, and None when a covering tile holds no clear
+    acquisition within the window. start and end are None when no range and no
+    week were given, and every tile then lists no acquisitions.
     """
     tiles = tile_index.covering(lon, lat)
     block = {"start": start, "end": end, "cloud": cloud, "sensor": sensor, "window": window, "tiles": []}
-    rows = store.acquisitions(tiles, start, end)
+    if not tiles:
+        return block
+    rows = store.acquisitions(tiles, start, end) if start and end else []
     for tile in tiles:
         acq = [{"date": r["date"], "time": r["time"], "sensor": r["sensor"], "cloud": r["cloud"]}
                for r in rows if r["tile"] == tile]
@@ -145,14 +169,13 @@ def hls_block(lon, lat, tile_index, store, granules, start, end, cloud, sensor, 
         block["tiles"].append({"tile": tile, "clear": clear, "acq": acq})
 
     dated = [g for g in granules if g.get("start")]
-    if tiles and dated:
+    clear_rows = []
+    if dated:
         first = min(g["start"][:10] for g in dated)
         last = max(g["start"][:10] for g in dated)
         lo = (datetime.date.fromisoformat(first) - datetime.timedelta(days=window)).isoformat()
         hi = (datetime.date.fromisoformat(last) + datetime.timedelta(days=window)).isoformat()
         clear_rows = [r for r in store.acquisitions(tiles, lo, hi) if hls.is_clear(r, cloud, sensor)]
-    else:
-        clear_rows = []
     for g in granules:
         g["hls"] = hls.nearest_clear(clear_rows, g["start"][:10], window) if g.get("start") else None
     return block
@@ -199,22 +222,18 @@ def point_report(lon, lat, crop, year, cdl_year, week=None, hls_params=None):
         except ValueError:
             sunday = None
 
-    hls_report = None
-    entry = hls.store_for(paths.HLS_DB)
-    if entry is not None:
-        store, tile_index = entry
-        params = dict(hls_params or {})
-        if not (params.get("start") and params.get("end")):
-            if sunday:
-                centre = datetime.date.fromisoformat(sunday)
-                span = datetime.timedelta(days=params.get("window", 7))
-                params["start"] = (centre - span).isoformat()
-                params["end"] = (centre + span).isoformat()
-            else:
-                params["start"] = params["end"] = "0000-00-00"   # nothing matches; tiles list stays empty
-        hls_report = hls_block(lon, lat, tile_index, store, granules,
-                               params["start"], params["end"],
-                               params.get("cloud", 30), params.get("sensor", "ALL"), params.get("window", 7))
+    params = dict(hls_params or {})
+    if not (params.get("start") and params.get("end")):
+        if sunday:
+            centre = datetime.date.fromisoformat(sunday)
+            span = datetime.timedelta(days=params.get("window", 7))
+            params["start"] = (centre - span).isoformat()
+            params["end"] = (centre + span).isoformat()
+        else:
+            params["start"] = params["end"] = None   # no range to list over; the tags still run
+    hls_report, _ = hls_read(lambda entry: hls_block(
+        lon, lat, entry[1], entry[0], granules, params["start"], params["end"],
+        params.get("cloud", 30), params.get("sensor", "ALL"), params.get("window", 7)))
 
     return {
         "lon": lon,
@@ -290,11 +309,12 @@ class Handler(BaseHTTPRequestHandler):
                 catalog["coincident_15min"] = index.count_where(
                     lambda p: bool(p.get("eco")) and abs(p["eco"][0]["dt"]) <= coincidence.SAME_PASS
                 ) if index else 0
-                summary = hls.store_for(paths.HLS_DB)
-                summary = summary[0].summary() if summary else {"count": 0, "fetched": None, "tiles": 0}
+                summary, busy = hls_read(lambda entry: entry[0].summary())
+                summary = summary or {"count": 0, "fetched": None, "tiles": 0}
                 catalog["hls_count"] = summary["count"]
                 catalog["hls_tiles"] = summary["tiles"]
                 catalog["hls_fetched"] = summary["fetched"]
+                catalog["hls_busy"] = busy
                 return self._send(json.dumps(catalog).encode(), CONTENT_TYPES[".json"])
 
             if route == "/api/emit/footprints.geojson":
@@ -308,10 +328,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(paths.ECO_FOOTPRINTS.read_bytes(), CONTENT_TYPES[".geojson"])
 
             if route == "/api/hls/tiles.geojson":
-                entry = hls.store_for(paths.HLS_DB)
-                if entry is None:
+                geo, busy = hls_read(lambda entry: entry[0].tiles_geojson())
+                if busy:
+                    return self._fail(HTTPStatus.SERVICE_UNAVAILABLE, HLS_BUSY)
+                if geo is None:
                     return self._fail(HTTPStatus.NOT_FOUND, "no HLS store; run ./run.sh hls")
-                return self._send(json.dumps(entry[0].tiles_geojson()).encode(), CONTENT_TYPES[".geojson"])
+                return self._send(json.dumps(geo).encode(), CONTENT_TYPES[".geojson"])
 
             if route == "/api/hls/counts":
                 return self._handle_hls_counts(query)
@@ -390,14 +412,20 @@ class Handler(BaseHTTPRequestHandler):
         return params, None
 
     def _handle_hls_counts(self, query):
-        entry = hls.store_for(paths.HLS_DB)
+        entry, busy = hls_read()
+        if busy:
+            return self._fail(HTTPStatus.SERVICE_UNAVAILABLE, HLS_BUSY)
         if entry is None:
             return self._fail(HTTPStatus.NOT_FOUND, "no HLS store; run ./run.sh hls")
         params, message = self._hls_params(query, required=True)
         if params is None:
             return self._fail(HTTPStatus.BAD_REQUEST, message)
-        counts = entry[0].counts(params["start"], params["end"], params["cloud"], params["sensor"])
-        self._send(json.dumps({"counts": counts}).encode(), CONTENT_TYPES[".json"])
+        counts, busy = hls_read(lambda opened: opened[0].counts(
+            params["start"], params["end"], params["cloud"], params["sensor"]))
+        if busy:
+            return self._fail(HTTPStatus.SERVICE_UNAVAILABLE, HLS_BUSY)
+        # counts is None only if the store vanished between the two reads.
+        self._send(json.dumps({"counts": counts or {}}).encode(), CONTENT_TYPES[".json"])
 
     def _handle_point(self, query):
         required = ("lon", "lat", "crop", "year", "cdl_year")
