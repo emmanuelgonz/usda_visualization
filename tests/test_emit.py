@@ -94,6 +94,11 @@ class TestFootprintIndex(unittest.TestCase):
     def test_index_for_missing_file_is_none(self):
         self.assertIsNone(emit.index_for(self.tmp / "absent.geojson"))
 
+    def test_count_where(self):
+        index = emit.FootprintIndex(self.path)
+        self.assertEqual(index.count_where(lambda p: p["id"].startswith("n")), 1)
+        self.assertEqual(index.count_where(lambda p: True), 3)
+
 
 if __name__ == "__main__":
     unittest.main()

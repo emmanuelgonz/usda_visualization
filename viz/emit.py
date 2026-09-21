@@ -64,6 +64,10 @@ class FootprintIndex:
         hits.sort(key=lambda p: p.get("start") or "", reverse=True)
         return hits
 
+    def count_where(self, predicate):
+        """Number of footprints whose properties satisfy the predicate."""
+        return sum(1 for _, _, props in self._items if predicate(props))
+
 
 _lock = threading.Lock()
 _cache = {}
