@@ -653,7 +653,7 @@ class TestInterfaceAssets(ServerTestCase):
     def test_emit_layer_controls_and_canvas_renderer(self):
         _, _, index = self.get("/")
         html = index.decode()
-        for ident in ('id="emit"', 'id="emitCloud"', 'id="emitWindow"', 'id="emitLegend"'):
+        for ident in ('id="emit"', 'id="emitCloud"', 'id="timeWindow"', 'id="emitLegend"'):
             self.assertIn(ident, html)
         _, _, app = self.get("/static/app.js")
         text = app.decode()
@@ -684,6 +684,59 @@ class TestInterfaceAssets(ServerTestCase):
         result = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "+2 h 0 m|+1 h 0 m|−41 s|+45 s|+24 h 0 m")
+
+    def test_time_window_is_shared_above_the_emit_block(self):
+        _, _, index = self.get("/")
+        html = index.decode()
+        self.assertIn('id="timeWindow"', html)
+        self.assertNotIn('id="emitWindow"', html)
+        self.assertLess(html.index('id="timeWindow"'), html.index('id="emit"'))
+        self.assertIn("Time window", html)
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        self.assertIn("function windowBounds()", text)
+        self.assertNotIn("emitWindowBounds", text)
+        self.assertIn("state.days", text)
+
+    def test_hls_layer_controls_and_routes(self):
+        _, _, index = self.get("/")
+        html = index.decode()
+        for ident in ('id="hls"', 'name="hlsMode"', 'id="hlsRange"', 'id="hlsCloud"',
+                      'name="hlsSensor"', 'id="hlsLegend"'):
+            self.assertIn(ident, html)
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        self.assertIn("/api/hls/tiles.geojson", text)
+        self.assertIn("/api/hls/counts?", text)
+        self.assertIn("HLS_CLASSES", text)
+        for colour in ("#e7d4e8", "#c2a5cf", "#9970ab", "#762a83", "#40004b"):
+            self.assertIn(colour, text)
+        self.assertIn('map.createPane("hls")', text)
+        self.assertIn("451", text[text.index('map.getPane("hls")'):text.index('map.getPane("hls")') + 80])
+        self.assertIn("setTimeout(fetchHlsCounts, 150)", text)
+
+    def test_hls_range_resolves_week_window_and_season(self):
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        if not shutil.which("node"):
+            self.skipTest("node not available")
+        parts = []
+        for name in ("weekSunday(year, week)", "isoDate(ms)", "hlsRange()"):
+            match = re.search(r"function " + re.escape(name) + r" \{.*?\n  \}", text, re.S)
+            self.assertIsNotNone(match, name + " not found in app.js")
+            parts.append(match.group(0))
+        script = (
+            'var state = { week: 30, year: 2025, days: 7, hlsMode: "week", crop: "corn", var: "cond" };\n'
+            "function weeksFor() { return [14, 30, 44]; }\n" + "\n".join(parts) + "\n"
+            "var a = hlsRange(); state.hlsMode = \"season\"; var b = hlsRange();\n"
+            "state.days = 0; state.hlsMode = \"week\"; var c = hlsRange();\n"
+            "state.week = null; var d = hlsRange();\n"
+            "console.log([a.start, a.end, b.start, b.end, c.start, c.end, String(d)].join(\"|\"));"
+        )
+        result = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(),
+                         "2025-07-20|2025-08-03|2025-03-31|2025-11-02|2025-07-27|2025-07-27|null")
 
 
 if __name__ == "__main__":

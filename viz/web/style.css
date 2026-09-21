@@ -129,3 +129,16 @@ output { font-variant-numeric: tabular-nums; font-weight: 450; color: var(--mute
 }
 .leaflet-eco-pane { cursor: default; }
 .readout-popup .emit-list .eco-tag { color: var(--muted); font-size: 11px; }
+
+/* HLS coverage */
+#hlsControls { display: grid; gap: 7px; padding-left: 22px; }
+#hlsControls.disabled { opacity: 0.5; }
+#hlsControls .note { margin: 0; font-size: 11px; }
+#hlsLegend { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 11px; color: var(--muted); }
+#hlsLegend span::before {
+  content: ""; display: inline-block; width: 14px; height: 10px; margin-right: 4px;
+  background: var(--swatch); border: 1px solid #40004b; vertical-align: middle; opacity: 0.8;
+}
+#hlsLegend span.zero::before { background: #fff; opacity: 0.4; }
+.leaflet-hls-pane { cursor: default; }
+label .note { font-weight: 450; }

@@ -17,15 +17,19 @@
     opacity: 0.7,
     playing: false,
     timer: null,
+    days: 7,
     emit: false,
     emitCloud: 30,
-    emitWindow: 7,
     emitOnlyWindow: false,
     coincide: false,
     coincideStep: 2,
     coincideOnly: false,
     eco: false,
-    ecoDay: "DAY"
+    ecoDay: "DAY",
+    hls: false,
+    hlsMode: "week",
+    hlsCloud: 30,
+    hlsSensor: "ALL"
   };
 
   // Hardcoded so the first paint fits CONUS before the boundary file loads.
@@ -58,6 +62,31 @@
   var COINCIDE_STEPS = [1, 5, 15, 30, 60, 120, 360, 720, 1440];   // minutes
   var ecoLayer = null;
   var ecoLoaded = false;
+
+  map.createPane("hls");
+  map.getPane("hls").style.zIndex = 451;   // above CPC, below ECOSTRESS and EMIT
+  var hlsRenderer = L.canvas({ pane: "hls" });
+  // Sequential purples, away from the CDL crop colours and both CPC ramps.
+  var HLS_CLASSES = [
+    { min: 1, max: 1, colour: "#e7d4e8", label: "1" },
+    { min: 2, max: 2, colour: "#c2a5cf", label: "2" },
+    { min: 3, max: 4, colour: "#9970ab", label: "3–4" },
+    { min: 5, max: 8, colour: "#762a83", label: "5–8" },
+    { min: 9, max: Infinity, colour: "#40004b", label: "9+" }
+  ];
+  var HLS_OUTLINE = "#40004b";
+  var hlsLayer = null;
+  var hlsLoaded = false;
+  var hlsCounts = {};
+  var hlsTimer = null;
+  var hlsRequest = 0;
+
+  function hlsColour(n) {
+    for (var i = 0; i < HLS_CLASSES.length; i++) {
+      if (n >= HLS_CLASSES[i].min && n <= HLS_CLASSES[i].max) { return HLS_CLASSES[i].colour; }
+    }
+    return null;
+  }
 
   function coincideSeconds() { return COINCIDE_STEPS[state.coincideStep] * 60; }
 
@@ -252,11 +281,31 @@
     return new Date(week1Monday.getTime() + ((week - 1) * 7 + 6) * 86400000);
   }
 
-  function emitWindowBounds() {
-    if (!state.emitWindow || state.week === null) { return null; }
+  function windowBounds() {
+    if (!state.days || state.week === null) { return null; }
     var centre = weekSunday(state.year, state.week).getTime();
-    var span = state.emitWindow * 86400000;
+    var span = state.days * 86400000;
     return [centre - span, centre + span];
+  }
+
+  function isoDate(ms) {
+    return new Date(ms).toISOString().slice(0, 10);
+  }
+
+  // The HLS counting range: the shared ±days window around the CPC week's Sunday,
+  // or the crop's reporting season (Monday of its first CPC week to Sunday of its last).
+  function hlsRange() {
+    if (state.week === null || state.week === undefined) { return null; }
+    if (state.hlsMode === "season") {
+      var weeks = weeksFor(state.crop, state.var, state.year);
+      if (!weeks.length) { return null; }
+      var first = weekSunday(state.year, weeks[0]).getTime() - 6 * 86400000;
+      var last = weekSunday(state.year, weeks[weeks.length - 1]).getTime();
+      return { start: isoDate(first), end: isoDate(last) };
+    }
+    var centre = weekSunday(state.year, state.week).getTime();
+    var span = state.days * 86400000;
+    return { start: isoDate(centre - span), end: isoDate(centre + span) };
   }
 
   function emitStyleFor(bounds) {
@@ -285,7 +334,7 @@
     emitLoaded = true;
     fetch("/api/emit/footprints.geojson").then(function (r) { return r.json(); }).then(function (geo) {
       emitLayer = L.geoJSON(geo, {
-        pane: "emit", renderer: emitRenderer, style: emitStyleFor(emitWindowBounds()),
+        pane: "emit", renderer: emitRenderer, style: emitStyleFor(windowBounds()),
         onEachFeature: function (f, layer) {
           var p = f.properties;
           f.properties._t = Date.parse(f.properties.start);
@@ -325,7 +374,7 @@
     ecoLoaded = true;
     fetch("/api/eco/footprints.geojson").then(function (r) { return r.json(); }).then(function (geo) {
       ecoLayer = L.geoJSON(geo, {
-        pane: "eco", renderer: ecoRenderer, style: ecoStyleFor(emitWindowBounds()),
+        pane: "eco", renderer: ecoRenderer, style: ecoStyleFor(windowBounds()),
         onEachFeature: function (f, layer) {
           var p = f.properties;
           p._t = Date.parse(p.start);
@@ -342,6 +391,97 @@
     el("ecoLegend").innerHTML = "<span>ECOSTRESS swath, bounding box (≈550 km), not the true outline</span>";
   }
 
+  function hlsStyleFor(counts) {
+    return function (feature) {
+      var n = counts[feature.properties.tile] || 0;
+      var colour = hlsColour(n);
+      return {
+        stroke: true, interactive: true,
+        color: HLS_OUTLINE, weight: 0.5, opacity: n ? 0.8 : 0.25,
+        fill: !!colour, fillColor: colour || "#ffffff", fillOpacity: colour ? 0.55 : 0
+      };
+    };
+  }
+
+  function applyHlsCounts() {
+    if (!hlsLayer) { return; }
+    hlsLayer.setStyle(hlsStyleFor(hlsCounts));
+    hlsLayer.eachLayer(function (layer) {
+      var tile = layer.feature.properties.tile;
+      layer.setTooltipContent(tile + ": " + (hlsCounts[tile] || 0) + " clear");
+    });
+    drawHlsLegend();
+  }
+
+  function fetchHlsCounts() {
+    var range = hlsRange();
+    if (!hlsLayer || !state.hls || !range) { return; }
+    var seq = ++hlsRequest;
+    fetch("/api/hls/counts?start=" + range.start + "&end=" + range.end +
+          "&cloud=" + state.hlsCloud + "&sensor=" + state.hlsSensor)
+      .then(function (r) { return r.json(); })
+      .then(function (body) {
+        if (seq !== hlsRequest) { return; }   // a newer request has superseded this one
+        hlsCounts = body.counts || {};
+        applyHlsCounts();
+      })
+      .catch(function () { /* keep the last counts */ });
+  }
+
+  function refreshHlsCounts() {
+    clearTimeout(hlsTimer);
+    hlsTimer = setTimeout(fetchHlsCounts, 150);
+  }
+
+  function loadHls() {
+    if (hlsLoaded || !(state.catalog.hls_count > 0)) { return; }
+    hlsLoaded = true;
+    fetch("/api/hls/tiles.geojson").then(function (r) { return r.json(); }).then(function (geo) {
+      hlsLayer = L.geoJSON(geo, {
+        pane: "hls", renderer: hlsRenderer, style: hlsStyleFor(hlsCounts),
+        onEachFeature: function (f, layer) {
+          layer.bindTooltip(f.properties.tile + ": 0 clear", { sticky: true, className: "emit-tip" });
+        }
+      });
+      syncHls();
+    }).catch(function () { hlsLoaded = false; });
+  }
+
+  function drawHlsLegend() {
+    var range = hlsRange();
+    el("hlsRange").textContent = range
+      ? (state.hlsMode === "season" ? "Season " : "Window ") + range.start + " to " + range.end
+      : "No CPC weeks for this selection";
+    el("hlsLegend").innerHTML =
+      '<span class="zero" style="--swatch:#fff">0</span>' +
+      HLS_CLASSES.map(function (c) {
+        return '<span style="--swatch:' + c.colour + '">' + c.label + "</span>";
+      }).join("") + "<span>clear acquisitions per MGRS tile</span>";
+  }
+
+  function syncHls() {
+    var available = state.catalog.hls_count > 0;
+    var box = el("hls");
+    box.disabled = !available;
+    box.parentNode.title = available ? "" : "No HLS store; run ./run.sh hls";
+    if (!available && state.hls) { state.hls = false; box.checked = false; }
+    var active = available && state.hls;
+    el("hlsControls").classList.toggle("disabled", !active);
+    el("hlsCloud").disabled = !active;
+    ["hlsMode", "hlsSensor"].forEach(function (name) {
+      Array.prototype.forEach.call(document.getElementsByName(name), function (radio) {
+        radio.disabled = !active;
+      });
+    });
+    if (!state.hls && hlsLayer && map.hasLayer(hlsLayer)) { map.removeLayer(hlsLayer); }
+    if (state.hls) {
+      if (!hlsLayer) { loadHls(); return; }
+      if (!map.hasLayer(hlsLayer)) { hlsLayer.addTo(map); }
+      drawHlsLegend();
+      refreshHlsCounts();
+    }
+  }
+
   function syncEco() {
     var available = state.catalog.eco_count > 0;
     var box = el("eco");
@@ -356,7 +496,7 @@
     if (state.eco) {
       if (!ecoLayer) { loadEco(); return; }
       if (!map.hasLayer(ecoLayer)) { ecoLayer.addTo(map); }
-      ecoLayer.setStyle(ecoStyleFor(emitWindowBounds()));
+      ecoLayer.setStyle(ecoStyleFor(windowBounds()));
     }
   }
 
@@ -366,9 +506,9 @@
     box.disabled = !available;
     box.parentNode.title = available ? "" : "No EMIT footprints; run ./run.sh emit";
     el("emitControls").classList.toggle("disabled", !(available && state.emit));
-    el("emitCloud").disabled = el("emitWindow").disabled = !(available && state.emit);
+    el("emitCloud").disabled = !(available && state.emit);
     // "Only within window" needs a window to filter by.
-    var onlyOk = available && state.emit && state.emitWindow > 0;
+    var onlyOk = available && state.emit && state.days > 0;
     el("emitOnlyWindow").disabled = !onlyOk;
     if (!onlyOk && state.emitOnlyWindow) { state.emitOnlyWindow = false; el("emitOnlyWindow").checked = false; }
     var coincideOk = available && state.emit && state.catalog.eco_count > 0;
@@ -380,7 +520,7 @@
     if (state.emit) {
       if (!emitLayer) { loadEmit(); return; }
       if (!map.hasLayer(emitLayer)) { emitLayer.addTo(map); }
-      emitLayer.setStyle(emitStyleFor(emitWindowBounds()));
+      emitLayer.setStyle(emitStyleFor(windowBounds()));
     }
   }
 
@@ -501,7 +641,7 @@
     html += '<p class="section">EMIT scenes covering this point: ' + granules.length + "</p>";
     if (granules.length) {
       var centre = report.week_sunday ? Date.parse(report.week_sunday + "T00:00:00Z") : null;
-      var bounds = emitWindowBounds();
+      var bounds = windowBounds();
       var sorted = granules.slice().sort(function (a, b) {
         if (centre === null) { return Date.parse(b.start) - Date.parse(a.start); }
         return Math.abs(Date.parse(a.start) - centre) - Math.abs(Date.parse(b.start) - centre);
@@ -550,6 +690,7 @@
     drawPairing();
     syncEmit();
     syncEco();
+    syncHls();
     el("weekOut").textContent = state.week === null ? "no weeks" : "w" + pad(state.week);
   }
 
@@ -657,10 +798,12 @@
     el("emitOnlyWindow").addEventListener("change", function (e) {
       state.emitOnlyWindow = e.target.checked; syncEmit();
     });
-    el("emitWindow").addEventListener("input", function (e) {
-      state.emitWindow = Number(e.target.value);
-      el("emitWindowOut").textContent = e.target.value === "0" ? "off" : e.target.value;
+    el("timeWindow").addEventListener("input", function (e) {
+      state.days = Number(e.target.value);
+      el("timeWindowOut").textContent = e.target.value === "0" ? "off" : e.target.value;
       syncEmit();
+      syncEco();
+      if (state.hls) { drawHlsLegend(); refreshHlsCounts(); }
     });
     el("coincide").addEventListener("change", function (e) { state.coincide = e.target.checked; syncEmit(); });
     el("coincideWindow").addEventListener("input", function (e) {
@@ -672,6 +815,22 @@
     el("eco").addEventListener("change", function (e) { state.eco = e.target.checked; syncEco(); });
     Array.prototype.forEach.call(document.getElementsByName("ecoDay"), function (radio) {
       radio.addEventListener("change", function (e) { if (e.target.checked) { state.ecoDay = e.target.value; syncEco(); } });
+    });
+    el("hls").addEventListener("change", function (e) { state.hls = e.target.checked; syncHls(); });
+    el("hlsCloud").addEventListener("input", function (e) {
+      state.hlsCloud = Number(e.target.value);
+      el("hlsCloudOut").textContent = e.target.value + "%";
+      refreshHlsCounts();
+    });
+    ["hlsMode", "hlsSensor"].forEach(function (name) {
+      Array.prototype.forEach.call(document.getElementsByName(name), function (radio) {
+        radio.addEventListener("change", function (e) {
+          if (!e.target.checked) { return; }
+          state[name] = e.target.value;
+          drawHlsLegend();
+          refreshHlsCounts();
+        });
+      });
     });
     Array.prototype.forEach.call(document.getElementsByName("mode"), function (radio) {
       radio.addEventListener("change", function (e) {
@@ -705,6 +864,6 @@
     wire();
     refresh();
     loadStates();
-    drawEmitLegend(); drawEcoLegend(); syncEmit(); syncEco();
+    drawEmitLegend(); drawEcoLegend(); drawHlsLegend(); syncEmit(); syncEco(); syncHls();
   });
 })();

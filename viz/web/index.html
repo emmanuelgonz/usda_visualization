@@ -52,13 +52,14 @@
       <label class="inline"><input type="radio" name="dim" value="grey"> Grey</label>
     </div>
     <label class="inline"><input type="checkbox" id="states" checked> State boundaries</label>
+    <label>Time window ±days <output id="timeWindowOut">7</output>
+      <input type="range" id="timeWindow" min="0" max="30" step="1" value="7">
+      <span class="note">Around the selected CPC week's Sunday; drives the EMIT highlight and the HLS week window.</span>
+    </label>
     <label class="inline"><input type="checkbox" id="emit"> EMIT footprints</label>
     <div class="sub" id="emitControls">
       <label>Max cloud cover <output id="emitCloudOut">30%</output>
         <input type="range" id="emitCloud" min="0" max="100" step="5" value="30">
-      </label>
-      <label>Window ±days <output id="emitWindowOut">7</output>
-        <input type="range" id="emitWindow" min="0" max="30" step="1" value="7">
       </label>
       <label class="inline"><input type="checkbox" id="emitOnlyWindow"> Only scenes within window</label>
       <label class="inline"><input type="checkbox" id="coincide"> Mark ECOSTRESS coincidence</label>
@@ -76,6 +77,23 @@
         <label class="inline"><input type="radio" name="ecoDay" value="ALL"> Both</label>
       </div>
       <div id="ecoLegend"></div>
+    </div>
+    <label class="inline"><input type="checkbox" id="hls"> HLS coverage</label>
+    <div class="sub" id="hlsControls">
+      <div class="inline">Mode:
+        <label class="inline"><input type="radio" name="hlsMode" value="week" checked> Week window</label>
+        <label class="inline"><input type="radio" name="hlsMode" value="season"> Season</label>
+      </div>
+      <div class="note" id="hlsRange"></div>
+      <label>Max cloud <output id="hlsCloudOut">30%</output>
+        <input type="range" id="hlsCloud" min="0" max="100" step="5" value="30">
+      </label>
+      <div class="inline">Sensor:
+        <label class="inline"><input type="radio" name="hlsSensor" value="ALL" checked> Both</label>
+        <label class="inline"><input type="radio" name="hlsSensor" value="L30"> L30</label>
+        <label class="inline"><input type="radio" name="hlsSensor" value="S30"> S30</label>
+      </div>
+      <div id="hlsLegend"></div>
     </div>
     <label>CDL opacity <output id="cdlOpacityOut">100%</output>
       <input type="range" id="cdlOpacity" min="0" max="100" step="5" value="100">
