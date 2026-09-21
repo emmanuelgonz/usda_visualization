@@ -28,6 +28,10 @@ case "${1:-}" in
     rm -rf "$tmp"
     ls -la viz/web/vendor/states.geojson
     ;;
+  emit)
+    # Fetches every EMIT L2A footprint over CONUS from NASA's CMR (no login)
+    # into data/emit/footprints.geojson. Rerun to refresh. Network access.
+    shift; exec python3 -m viz.fetch_emit "$@" ;;
   serve)
     shift
     if [ ! -f viz/web/vendor/leaflet/leaflet.js ] || [ ! -f viz/web/vendor/states.geojson ]; then
@@ -39,5 +43,5 @@ case "${1:-}" in
   # -t . keeps the repo root as the top-level import dir so `from viz import ...`
   # and `from tests import fixtures` both resolve.
   test)    shift; exec python3 -m unittest discover -s tests -t . -v "$@" ;;
-  *) echo "usage: $0 {extract|prepare|vendor|serve|test} [args]" >&2; exit 2 ;;
+  *) echo "usage: $0 {extract|prepare|vendor|emit|serve|test} [args]" >&2; exit 2 ;;
 esac
