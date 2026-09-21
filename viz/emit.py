@@ -78,12 +78,13 @@ def index_for(path):
     path = Path(path)
     if not path.is_file():
         return None
-    key = (str(path), os.stat(path).st_mtime_ns)
+    key = str(path)
+    stamp = os.stat(path).st_mtime_ns
     with _lock:
-        index = _cache.get(key)
-    if index is None:
-        index = FootprintIndex(path)
-        with _lock:
-            _cache.clear()
-            _cache[key] = index
+        cached = _cache.get(key)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    index = FootprintIndex(path)
+    with _lock:
+        _cache[key] = (stamp, index)
     return index

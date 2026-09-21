@@ -302,14 +302,14 @@
     el("emitLegend").innerHTML =
       years.map(function (y) { return '<span style="--swatch:' + EMIT_YEAR_COLOURS[y] + '">' + y + "</span>"; }).join("") +
       '<span class="hl" style="--swatch:' + EMIT_HIGHLIGHT + '">within window</span>' +
-      '<span class="hl" style="--swatch:#8b45d9">filled = ECOSTRESS coincident</span>';
+      (state.catalog.eco_count > 0 ? '<span class="fillsw">filled = ECOSTRESS coincident</span>' : "");
   }
 
   function ecoStyleFor(bounds) {
     return function (feature) {
       var p = feature.properties;
       var inWindow = !!(bounds && p._t >= bounds[0] && p._t <= bounds[1]);
-      var hidden = state.ecoDay !== "BOTH" && p.daynight !== state.ecoDay;
+      var hidden = state.ecoDay !== "ALL" && p.daynight !== state.ecoDay;
       return {
         stroke: !hidden, interactive: !hidden, fill: false,
         color: inWindow ? EMIT_HIGHLIGHT : ECO_COLOUR,
@@ -329,7 +329,7 @@
         onEachFeature: function (f, layer) {
           var p = f.properties;
           p._t = Date.parse(p.start);
-          layer.bindTooltip(p.start.slice(0, 10) + " " + p.start.slice(11, 16) + " UTC · " +
+          layer.bindTooltip((p.start || "").slice(0, 10) + " " + (p.start || "").slice(11, 16) + " UTC · " +
                             (p.daynight || "?").toLowerCase() + " · bounding box",
                             { sticky: true, className: "emit-tip" });
         }
@@ -347,6 +347,7 @@
     var box = el("eco");
     box.disabled = !available;
     box.parentNode.title = available ? "" : "No ECOSTRESS footprints; run ./run.sh footprints";
+    if (!available && state.eco) { state.eco = false; box.checked = false; }
     el("ecoControls").classList.toggle("disabled", !(available && state.eco));
     Array.prototype.forEach.call(document.getElementsByName("ecoDay"), function (radio) {
       radio.disabled = !(available && state.eco);

@@ -108,6 +108,9 @@ output { font-variant-numeric: tabular-nums; font-weight: 450; color: var(--mute
   border-top: 2px solid var(--swatch); vertical-align: middle;
 }
 #emitLegend span.hl::before { border-top-width: 3px; }
+#emitLegend span.fillsw::before {
+  height: 10px; border: 1px solid #555; background: rgba(85,85,85,0.25); border-top-width: 1px;
+}
 .leaflet-emit-pane { cursor: default; }
 .emit-tip { font-size: 11px; }
 .readout-popup .emit-list { margin: 4px 0 0; padding: 0; list-style: none; }

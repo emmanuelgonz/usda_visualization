@@ -244,7 +244,7 @@ class Handler(BaseHTTPRequestHandler):
 
             if route == "/api/emit/footprints.geojson":
                 if not paths.EMIT_FOOTPRINTS.is_file():
-                    return self._fail(HTTPStatus.NOT_FOUND, "no EMIT footprints; run ./run.sh emit")
+                    return self._fail(HTTPStatus.NOT_FOUND, "no EMIT footprints; run ./run.sh footprints")
                 return self._send(paths.EMIT_FOOTPRINTS.read_bytes(), CONTENT_TYPES[".geojson"])
 
             if route == "/api/eco/footprints.geojson":
