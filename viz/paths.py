@@ -12,6 +12,8 @@ CPC_DATA = DATA / "cpc"
 CDL_DATA = DATA / "cdl"
 MASK_DATA = DATA / "masks"
 CATALOG = DATA / "catalog.json"
+EMIT_DATA = DATA / "emit"
+EMIT_FOOTPRINTS = EMIT_DATA / "footprints.geojson"
 
 CACHE = ROOT / "cache"
 TILE_CACHE = CACHE / "tiles"
