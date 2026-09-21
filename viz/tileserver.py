@@ -1,6 +1,7 @@
 """Local tile server: routes, on-demand warping, and the disk tile cache."""
 
 import argparse
+import datetime
 import json
 import re
 import sys
@@ -12,7 +13,7 @@ from urllib.parse import parse_qs, urlparse
 
 import numpy as np
 
-from viz import coincidence, color, emit, naming, paths, rasters
+from viz import coincidence, color, emit, hls, naming, paths, rasters
 
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -29,6 +30,8 @@ TILE_CPC_RE = re.compile(
     r"^/tiles/cpc/(?P<crop>[a-z]+)/(?P<var>cond|prog)/(?P<year>\d{4})/(?P<week>\d+)"
     r"/(?P<z>\d+)/(?P<x>\d+)/(?P<y>\d+)\.png$"
 )
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+HLS_SENSORS = ("ALL", "L30", "S30")
 
 # Changes on every server start. The interface appends it to tile URLs so the
 # browser's HTTP cache is invalidated whenever the server (and so any palette
@@ -126,7 +129,36 @@ def render_cpc_tile(crop, var, year, week, z, x, y, mask_year=None):
     return _cached(key, z, x, y, render)
 
 
-def point_report(lon, lat, crop, year, cdl_year, week=None):
+def hls_block(lon, lat, tile_index, store, granules, start, end, cloud, sensor, window):
+    """The point's HLS tiles over [start, end], and a nearest-clear tag on each EMIT granule.
+
+    granules are copies, never the index's own dicts, so the tag does not
+    poison the shared FootprintIndex.
+    """
+    tiles = tile_index.covering(lon, lat)
+    block = {"start": start, "end": end, "cloud": cloud, "sensor": sensor, "window": window, "tiles": []}
+    rows = store.acquisitions(tiles, start, end)
+    for tile in tiles:
+        acq = [{"date": r["date"], "time": r["time"], "sensor": r["sensor"], "cloud": r["cloud"]}
+               for r in rows if r["tile"] == tile]
+        clear = sum(1 for r in acq if hls.is_clear(r, cloud, sensor))
+        block["tiles"].append({"tile": tile, "clear": clear, "acq": acq})
+
+    dated = [g for g in granules if g.get("start")]
+    if tiles and dated:
+        first = min(g["start"][:10] for g in dated)
+        last = max(g["start"][:10] for g in dated)
+        lo = (datetime.date.fromisoformat(first) - datetime.timedelta(days=window)).isoformat()
+        hi = (datetime.date.fromisoformat(last) + datetime.timedelta(days=window)).isoformat()
+        clear_rows = [r for r in store.acquisitions(tiles, lo, hi) if hls.is_clear(r, cloud, sensor)]
+    else:
+        clear_rows = []
+    for g in granules:
+        g["hls"] = hls.nearest_clear(clear_rows, g["start"][:10], window) if g.get("start") else None
+    return block
+
+
+def point_report(lon, lat, crop, year, cdl_year, week=None, hls_params=None):
     """CDL class, crop-cover split, and the weekly CPC series at one location."""
     x5070, y5070 = rasters.lonlat_to_5070(lon, lat)
 
@@ -157,7 +189,7 @@ def point_report(lon, lat, crop, year, cdl_year, week=None):
         series[var] = points
 
     index = emit.index_for(paths.EMIT_FOOTPRINTS)
-    granules = index.covering(lon, lat) if index else []
+    granules = [dict(g) for g in index.covering(lon, lat)] if index else []
     eco_index = emit.index_for(paths.ECO_FOOTPRINTS)
     eco_swaths = eco_index.covering(lon, lat) if eco_index else []
     sunday = None
@@ -166,6 +198,23 @@ def point_report(lon, lat, crop, year, cdl_year, week=None):
             sunday = emit.week_sunday(year, week).isoformat()
         except ValueError:
             sunday = None
+
+    hls_report = None
+    entry = hls.store_for(paths.HLS_DB)
+    if entry is not None:
+        store, tile_index = entry
+        params = dict(hls_params or {})
+        if not (params.get("start") and params.get("end")):
+            if sunday:
+                centre = datetime.date.fromisoformat(sunday)
+                span = datetime.timedelta(days=params.get("window", 7))
+                params["start"] = (centre - span).isoformat()
+                params["end"] = (centre + span).isoformat()
+            else:
+                params["start"] = params["end"] = "0000-00-00"   # nothing matches; tiles list stays empty
+        hls_report = hls_block(lon, lat, tile_index, store, granules,
+                               params["start"], params["end"],
+                               params.get("cloud", 30), params.get("sensor", "ALL"), params.get("window", 7))
 
     return {
         "lon": lon,
@@ -180,6 +229,7 @@ def point_report(lon, lat, crop, year, cdl_year, week=None):
         "emit": granules,
         "eco": eco_swaths,
         "week_sunday": sunday,
+        "hls": hls_report,
     }
 
 
@@ -240,6 +290,11 @@ class Handler(BaseHTTPRequestHandler):
                 catalog["coincident_15min"] = index.count_where(
                     lambda p: bool(p.get("eco")) and abs(p["eco"][0]["dt"]) <= coincidence.SAME_PASS
                 ) if index else 0
+                summary = hls.store_for(paths.HLS_DB)
+                summary = summary[0].summary() if summary else {"count": 0, "fetched": None, "tiles": 0}
+                catalog["hls_count"] = summary["count"]
+                catalog["hls_tiles"] = summary["tiles"]
+                catalog["hls_fetched"] = summary["fetched"]
                 return self._send(json.dumps(catalog).encode(), CONTENT_TYPES[".json"])
 
             if route == "/api/emit/footprints.geojson":
@@ -251,6 +306,15 @@ class Handler(BaseHTTPRequestHandler):
                 if not paths.ECO_FOOTPRINTS.is_file():
                     return self._fail(HTTPStatus.NOT_FOUND, "no ECOSTRESS footprints; run ./run.sh footprints")
                 return self._send(paths.ECO_FOOTPRINTS.read_bytes(), CONTENT_TYPES[".geojson"])
+
+            if route == "/api/hls/tiles.geojson":
+                entry = hls.store_for(paths.HLS_DB)
+                if entry is None:
+                    return self._fail(HTTPStatus.NOT_FOUND, "no HLS store; run ./run.sh hls")
+                return self._send(json.dumps(entry[0].tiles_geojson()).encode(), CONTENT_TYPES[".geojson"])
+
+            if route == "/api/hls/counts":
+                return self._handle_hls_counts(query)
 
             if route == "/api/point":
                 return self._handle_point(query)
@@ -302,6 +366,39 @@ class Handler(BaseHTTPRequestHandler):
         self._send(render_cpc_tile(crop, var, year, week, z, x, y, mask_year),
                    "image/png", cache=True)
 
+    def _hls_params(self, query, required):
+        """Validated HLS parameters, or (None, message). Missing optional ones take defaults."""
+        params = {}
+        for key in ("start", "end"):
+            if key in query:
+                value = query[key][0]
+                if not DATE_RE.match(value):
+                    return None, f"{key} must be YYYY-MM-DD"
+                params[key] = value
+            elif required:
+                return None, "required: start, end"
+        try:
+            params["cloud"] = int(query["cloud"][0]) if "cloud" in query else 30
+            params["window"] = int(query["window"][0]) if "window" in query else 7
+        except ValueError:
+            return None, "cloud and window must be integers"
+        if not (0 <= params["cloud"] <= 100) or not (0 <= params["window"] <= 60):
+            return None, "cloud must be 0-100 and window 0-60"
+        params["sensor"] = query["sensor"][0] if "sensor" in query else "ALL"
+        if params["sensor"] not in HLS_SENSORS:
+            return None, "sensor must be ALL, L30, or S30"
+        return params, None
+
+    def _handle_hls_counts(self, query):
+        entry = hls.store_for(paths.HLS_DB)
+        if entry is None:
+            return self._fail(HTTPStatus.NOT_FOUND, "no HLS store; run ./run.sh hls")
+        params, message = self._hls_params(query, required=True)
+        if params is None:
+            return self._fail(HTTPStatus.BAD_REQUEST, message)
+        counts = entry[0].counts(params["start"], params["end"], params["cloud"], params["sensor"])
+        self._send(json.dumps({"counts": counts}).encode(), CONTENT_TYPES[".json"])
+
     def _handle_point(self, query):
         required = ("lon", "lat", "crop", "year", "cdl_year")
         if any(key not in query for key in required):
@@ -317,7 +414,10 @@ class Handler(BaseHTTPRequestHandler):
                                "lon, lat, year, cdl_year must be numeric")
         if week is not None and not (1 <= week <= 53):
             return self._fail(HTTPStatus.BAD_REQUEST, "week must be 1-53")
-        report = point_report(lon, lat, query["crop"][0], year, cdl_year, week)
+        hls_params, message = self._hls_params(query, required=False)
+        if hls_params is None:
+            return self._fail(HTTPStatus.BAD_REQUEST, message)
+        report = point_report(lon, lat, query["crop"][0], year, cdl_year, week, hls_params=hls_params)
         self._send(json.dumps(report).encode(), CONTENT_TYPES[".json"])
 
 

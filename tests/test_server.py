@@ -25,7 +25,8 @@ class ServerTestCase(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = Path(tempfile.mkdtemp())
         cls._saved = (paths.DATA, paths.CPC_DATA, paths.CDL_DATA, paths.MASK_DATA,
-                      paths.CATALOG, paths.TILE_CACHE, paths.EMIT_FOOTPRINTS, paths.ECO_FOOTPRINTS)
+                      paths.CATALOG, paths.TILE_CACHE, paths.EMIT_FOOTPRINTS, paths.ECO_FOOTPRINTS,
+                      paths.HLS_DB)
 
         paths.DATA = cls.tmp / "data"
         paths.CPC_DATA = paths.DATA / "cpc"
@@ -35,6 +36,7 @@ class ServerTestCase(unittest.TestCase):
         paths.TILE_CACHE = cls.tmp / "cache" / "tiles"
         paths.EMIT_FOOTPRINTS = paths.DATA / "emit" / "footprints.geojson"
         paths.ECO_FOOTPRINTS = paths.DATA / "eco" / "footprints.geojson"
+        paths.HLS_DB = paths.DATA / "hls" / "hls.sqlite"
 
         (paths.CPC_DATA / "corn" / "cond").mkdir(parents=True)
         paths.CDL_DATA.mkdir(parents=True)
@@ -90,6 +92,26 @@ class ServerTestCase(unittest.TestCase):
         coincidence.pair(emit_doc["features"], eco_doc["features"])
         paths.EMIT_FOOTPRINTS.write_text(json.dumps(emit_doc))
 
+        # An HLS store with one tile over the fixture centre and one far away.
+        from viz import hls
+
+        def acq(ur, start, cloud):
+            sensor, tile = hls.parse_ur(ur)
+            return {"id": ur, "tile": tile, "date": start[:10], "time": start, "sensor": sensor, "cloud": cloud}
+
+        hls_store = hls.Store(paths.HLS_DB)
+        hls_store.replace_month("S30", "2025-07", [
+            acq("HLS.S30.T99ZZZ.2025199T170000.v2.0", "2025-07-18T17:00:00Z", 10),
+            acq("HLS.S30.T99ZZZ.2025204T170000.v2.0", "2025-07-23T17:00:00Z", 10),
+            acq("HLS.S30.T98ZZZ.2025201T170000.v2.0", "2025-07-20T17:00:00Z", 0),
+        ], "2025-08-02T00:00:00+00:00")
+        hls_store.replace_month("L30", "2025-07", [
+            acq("HLS.L30.T99ZZZ.2025202T160000.v2.0", "2025-07-21T16:00:00Z", 80),
+        ], "2025-08-02T00:00:00+00:00")
+        hls_store.put_tile("T99ZZZ", square(cls.lon, cls.lat, 0.5))
+        hls_store.put_tile("T98ZZZ", square(cls.lon + 20, cls.lat, 0.5))
+        hls_store.close()
+
         cls.server = tileserver.make_server(0)
         cls.port = cls.server.server_address[1]
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
@@ -104,7 +126,8 @@ class ServerTestCase(unittest.TestCase):
         cls.server.shutdown()
         cls.server.server_close()
         (paths.DATA, paths.CPC_DATA, paths.CDL_DATA, paths.MASK_DATA,
-         paths.CATALOG, paths.TILE_CACHE, paths.EMIT_FOOTPRINTS, paths.ECO_FOOTPRINTS) = cls._saved
+         paths.CATALOG, paths.TILE_CACHE, paths.EMIT_FOOTPRINTS, paths.ECO_FOOTPRINTS,
+         paths.HLS_DB) = cls._saved
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
     def get(self, path):
@@ -373,6 +396,92 @@ class TestEcoRoutes(ServerTestCase):
             self.assertEqual(json.loads(self.get(self.point_url())[2])["eco"], [])
         finally:
             moved.rename(paths.ECO_FOOTPRINTS)
+
+
+class TestHlsRoutes(ServerTestCase):
+    HLS_QUERY = "&start=2025-07-15&end=2025-07-31&cloud=30&sensor=ALL&window=7"
+
+    def test_tiles_are_served_as_geojson(self):
+        status, ctype, body = self.get("/api/hls/tiles.geojson")
+        self.assertEqual(status, 200)
+        self.assertEqual(ctype, "application/geo+json")
+        tiles = [f["properties"]["tile"] for f in json.loads(body)["features"]]
+        self.assertEqual(tiles, ["T98ZZZ", "T99ZZZ"])
+
+    def test_counts_apply_range_cloud_and_sensor(self):
+        _, ctype, body = self.get("/api/hls/counts?start=2025-07-15&end=2025-07-31&cloud=30&sensor=ALL")
+        self.assertEqual(ctype, "application/json")
+        self.assertEqual(json.loads(body), {"counts": {"T99ZZZ": 2, "T98ZZZ": 1}})
+        _, _, body = self.get("/api/hls/counts?start=2025-07-15&end=2025-07-31&cloud=30&sensor=L30")
+        self.assertEqual(json.loads(body), {"counts": {}})
+        _, _, body = self.get("/api/hls/counts?start=2025-07-19&end=2025-07-22&cloud=100&sensor=ALL")
+        self.assertEqual(json.loads(body), {"counts": {"T99ZZZ": 1, "T98ZZZ": 1}})
+
+    def test_counts_reject_bad_parameters(self):
+        for query in ("start=2025-07-15&end=2025-07-31&cloud=30&sensor=X30",
+                      "start=2025-7-15&end=2025-07-31&cloud=30&sensor=ALL",
+                      "start=2025-07-15&end=2025-07-31&cloud=abc&sensor=ALL",
+                      "end=2025-07-31&cloud=30&sensor=ALL"):
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                self.get("/api/hls/counts?" + query)
+            self.assertEqual(ctx.exception.code, 400, query)
+
+    def test_catalog_reports_hls_fields(self):
+        catalog = json.loads(self.get("/api/catalog")[2])
+        self.assertEqual(catalog["hls_count"], 4)
+        self.assertEqual(catalog["hls_tiles"], 2)
+        self.assertEqual(catalog["hls_fetched"], "2025-08-02T00:00:00+00:00")
+
+    def test_point_lists_covering_tiles_with_clear_counts(self):
+        report = json.loads(self.get(self.point_url() + self.HLS_QUERY)[2])
+        block = report["hls"]
+        self.assertEqual((block["start"], block["end"], block["cloud"], block["sensor"], block["window"]),
+                         ("2025-07-15", "2025-07-31", 30, "ALL", 7))
+        self.assertEqual(len(block["tiles"]), 1)
+        tile = block["tiles"][0]
+        self.assertEqual(tile["tile"], "T99ZZZ")
+        self.assertEqual(tile["clear"], 2)
+        self.assertEqual([a["date"] for a in tile["acq"]], ["2025-07-18", "2025-07-21", "2025-07-23"])
+        self.assertEqual(tile["acq"][1], {"date": "2025-07-21", "time": "2025-07-21T16:00:00Z",
+                                          "sensor": "L30", "cloud": 80})
+
+    def test_point_tags_emit_scenes_with_the_nearest_clear_acquisition(self):
+        report = json.loads(self.get(self.point_url() + self.HLS_QUERY)[2])
+        by_id = {g["id"]: g for g in report["emit"]}
+        self.assertEqual(by_id["near-new"]["hls"], {"date": "2025-07-18", "sensor": "S30", "cloud": 10, "dt": -2})
+        self.assertIsNone(by_id["near-old"]["hls"])
+        # The sensor filter applies to the tag: with S30 excluded only the cloudy L30 row remains.
+        report = json.loads(self.get(self.point_url() + "&start=2025-07-15&end=2025-07-31&cloud=30&sensor=L30&window=7")[2])
+        self.assertIsNone({g["id"]: g for g in report["emit"]}["near-new"]["hls"])
+        self.assertEqual(report["hls"]["tiles"][0]["clear"], 0)
+
+    def test_point_defaults_the_range_to_the_week_window(self):
+        # 2024 week 30 ends Sunday 2024-07-28; ±7 days is 07-21 to 08-04.
+        report = json.loads(self.get(self.point_url() + "&week=30")[2])
+        self.assertEqual((report["hls"]["start"], report["hls"]["end"]), ("2024-07-21", "2024-08-04"))
+        self.assertEqual(report["hls"]["tiles"][0]["acq"], [])
+
+    def test_missing_store_gives_404_null_block_and_zero_fields(self):
+        # A tagged request first: if hls_block wrote onto the FootprintIndex's own
+        # dicts, the tag would survive into the no-store response below.
+        tagged = json.loads(self.get(self.point_url() + self.HLS_QUERY)[2])
+        self.assertIsNotNone({g["id"]: g for g in tagged["emit"]}["near-new"]["hls"])
+        moved = paths.HLS_DB.with_name("moved.sqlite")
+        paths.HLS_DB.rename(moved)
+        try:
+            for route in ("/api/hls/tiles.geojson", "/api/hls/counts?start=2025-07-15&end=2025-07-31&cloud=30&sensor=ALL"):
+                with self.assertRaises(urllib.error.HTTPError) as ctx:
+                    self.get(route)
+                self.assertEqual(ctx.exception.code, 404)
+                self.assertIn("run.sh hls", ctx.exception.read().decode())
+            report = json.loads(self.get(self.point_url() + self.HLS_QUERY)[2])
+            self.assertIsNone(report["hls"])
+            for g in report["emit"]:
+                self.assertNotIn("hls", g)
+            catalog = json.loads(self.get("/api/catalog")[2])
+            self.assertEqual((catalog["hls_count"], catalog["hls_tiles"], catalog["hls_fetched"]), (0, 0, None))
+        finally:
+            moved.rename(paths.HLS_DB)
 
 
 class TestInterfaceAssets(ServerTestCase):
