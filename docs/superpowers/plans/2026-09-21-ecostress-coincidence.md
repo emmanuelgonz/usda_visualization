@@ -1048,8 +1048,11 @@ Append:
     var sign = seconds < 0 ? "−" : "+";
     var s = Math.abs(seconds);
     if (s < 60) { return sign + s + " s"; }
-    if (s < 3600) { return sign + Math.round(s / 60) + " m"; }
-    return sign + Math.floor(s / 3600) + " h " + Math.round((s % 3600) / 60) + " m";
+    // Round to whole minutes FIRST, then split, so 7199 s is "+2 h 0 m",
+    // never "+1 h 60 m", and 3599 s is "+1 h 0 m", never "+60 m".
+    var totalM = Math.round(s / 60);
+    if (totalM < 60) { return sign + totalM + " m"; }
+    return sign + Math.floor(totalM / 60) + " h " + (totalM % 60) + " m";
   }
 
   function stepLabel(step) {
@@ -1243,3 +1246,34 @@ git commit -m "Draw ECOSTRESS swath boxes and mark EMIT-ECOSTRESS coincidence"
 **Placeholder scan.** Every step carries runnable content.
 
 **Type consistency.** `cmr.link` replaces `fetch_emit._link`, same signature. `paths.ECO_FOOTPRINTS` defined in Task 2, used in Tasks 3–4. `coincidence.pair` writes `eco` pairs with keys `id`, `start`, `daynight`, `dt`, which `emitStyleFor` and `showReadout` read (`p.eco[0].dt`). `FootprintIndex.count_where` defined in Task 3, used in Task 4. The catalog keys `eco_count`, `eco_fetched`, `coincident_15min` are written in Task 4 and read in Task 5's `syncEco`/`syncEmit`. The ECOSTRESS route string is identical in Task 4 and Task 5.
+
+---
+
+## Appendix: post-review amendments
+
+The final whole-branch review returned one Critical, two Important, and eight Minor findings, with a
+verdict of "ready to merge with fixes". One fix wave, commit `7f81548`, closed the Critical, both
+Important, and five of the minors. The code blocks above are not rewritten; this is the record of
+where the committed code departs from them and why.
+
+| # | File | Change | Reason |
+| --- | --- | --- | --- |
+| C1 | `viz/emit.py` | `index_for` cache keyed by path with `(mtime_ns, index)` as the value; no `clear()` | The EMIT-plan code cleared the cache on every new key. With two files queried per request each build evicted the other, so every catalog and point request re-parsed 63 MB of JSON (5–8 s measured). Refresh on rewrite is preserved by the stored mtime. |
+| I2 | `run.sh` | `footprints|emit` is a plain three-line chain | The guard `[ -f viz/coincidence.py ] && … \|\| true` was dead once the module was committed and swallowed a pairing failure with exit 0 after the EMIT file had been rewritten without pairs. |
+| I3 | `run.sh`, `viz/tileserver.py` | All messages say `./run.sh footprints`; usage lists both names | `emit` remains an alias that runs all three steps, as the spec mandates. |
+| M1 | `viz/web/app.js`, `style.css` | Legend's coincidence entry is a filled neutral swatch, shown only when ECOSTRESS data exists | It had reused the 2023 year colour and drawn as a line. |
+| M2 | `viz/web/` | Day/Night/Both radio's third value is `ALL` | CMR's own `day_night_flag` can be `BOTH`, which would have collided with the show-all setting. |
+| M3 | `viz/web/app.js` | `syncEco` resets `state.eco` when unavailable | Mirrors `syncEmit`'s handling of the coincidence flag. |
+| M4 | `viz/web/app.js` | ECOSTRESS tooltip guards a null `start` | Defensive; no such feature exists in the file today. |
+| M5 | four files | Mode restored to 100644 | Committed with executable bits by a Windows-mount quirk after a machine restart. |
+
+Three minors ship as reviewed: the ECOSTRESS window highlight follows the EMIT-gated week slider
+(the spec says the same window applies), `test_cap` asserts length only and there is no explicit
+24 h boundary test (neither path is reached by the real data, whose largest pair count is 18 and
+largest offset 83,641 s), and `/api/point` returns every covering ECOSTRESS swath (1,741 at Ames),
+which is fine on localhost and would want a cap before any remote use.
+
+Measured on the real data: 75,730 ECOSTRESS swaths (2022–2026); 19,205 of 28,882 EMIT scenes have
+an ECOSTRESS swath within 15 minutes and 26,105 within 24 hours; pairing runs in 4.4 s. The EMIT
+file grows to 33.7 MB once pairs are written onto it, so both layers together load 63 MB per
+browser session.

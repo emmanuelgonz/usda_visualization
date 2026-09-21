@@ -108,6 +108,9 @@ output { font-variant-numeric: tabular-nums; font-weight: 450; color: var(--mute
   border-top: 2px solid var(--swatch); vertical-align: middle;
 }
 #emitLegend span.hl::before { border-top-width: 3px; }
+#emitLegend span.fillsw::before {
+  height: 10px; border: 1px solid #555; background: rgba(85,85,85,0.25); border-top-width: 1px;
+}
 .leaflet-emit-pane { cursor: default; }
 .emit-tip { font-size: 11px; }
 .readout-popup .emit-list { margin: 4px 0 0; padding: 0; list-style: none; }
@@ -115,3 +118,14 @@ output { font-variant-numeric: tabular-nums; font-weight: 450; color: var(--mute
 .readout-popup .emit-list .when { font-variant-numeric: tabular-nums; }
 .readout-popup .emit-list .in { font-weight: 650; }
 .readout-popup .emit-list a { color: var(--accent); }
+
+/* ECOSTRESS swaths */
+#ecoControls { display: grid; gap: 7px; padding-left: 22px; }
+#ecoControls.disabled { opacity: 0.5; }
+#ecoLegend { font-size: 11px; color: var(--muted); }
+#ecoLegend span::before {
+  content: ""; display: inline-block; width: 14px; height: 0; margin-right: 4px;
+  border-top: 2px dashed #5b6770; vertical-align: middle;
+}
+.leaflet-eco-pane { cursor: default; }
+.readout-popup .emit-list .eco-tag { color: var(--muted); font-size: 11px; }

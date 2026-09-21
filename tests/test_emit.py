@@ -94,6 +94,22 @@ class TestFootprintIndex(unittest.TestCase):
     def test_index_for_missing_file_is_none(self):
         self.assertIsNone(emit.index_for(self.tmp / "absent.geojson"))
 
+    def test_index_for_keeps_two_files_cached_independently(self):
+        other = self.tmp / "other.geojson"
+        other.write_text(json.dumps({"type": "FeatureCollection", "features": []}))
+        a1 = emit.index_for(self.path)
+        b1 = emit.index_for(other)
+        a2 = emit.index_for(self.path)
+        b2 = emit.index_for(other)
+        self.assertIs(a1, a2)
+        self.assertIs(b1, b2)
+        self.assertIsNot(a1, b1)
+
+    def test_count_where(self):
+        index = emit.FootprintIndex(self.path)
+        self.assertEqual(index.count_where(lambda p: p["id"].startswith("n")), 1)
+        self.assertEqual(index.count_where(lambda p: True), 3)
+
 
 if __name__ == "__main__":
     unittest.main()

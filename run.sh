@@ -28,10 +28,15 @@ case "${1:-}" in
     rm -rf "$tmp"
     ls -la viz/web/vendor/states.geojson
     ;;
-  emit)
-    # Fetches every EMIT L2A footprint over CONUS from NASA's CMR (no login)
-    # into data/emit/footprints.geojson. Rerun to refresh. Network access.
-    shift; exec python3 -m viz.fetch_emit "$@" ;;
+  footprints|emit)
+    # Fetches EMIT L2A footprints and ECOSTRESS swath boxes over CONUS from
+    # NASA's CMR (no login), then pairs them. Rerun to refresh. Network access.
+    # "emit" is kept as an alias; both names run all three steps.
+    shift
+    python3 -m viz.fetch_emit "$@"
+    python3 -m viz.fetch_eco "$@"
+    python3 -m viz.coincidence "$@"
+    ;;
   serve)
     shift
     if [ ! -f viz/web/vendor/leaflet/leaflet.js ] || [ ! -f viz/web/vendor/states.geojson ]; then
@@ -39,12 +44,15 @@ case "${1:-}" in
       exit 1
     fi
     if [ ! -f data/emit/footprints.geojson ]; then
-      echo "note: no EMIT footprints (data/emit/footprints.geojson); the EMIT layer is off until ./run.sh emit is run" >&2
+      echo "note: no EMIT footprints (data/emit/footprints.geojson); the EMIT layer is off until ./run.sh footprints is run" >&2
+    fi
+    if [ ! -f data/eco/footprints.geojson ]; then
+      echo "note: no ECOSTRESS footprints (data/eco/footprints.geojson); the ECOSTRESS layer is off until ./run.sh footprints is run" >&2
     fi
     exec python3 -m viz.tileserver "$@"
     ;;
   # -t . keeps the repo root as the top-level import dir so `from viz import ...`
   # and `from tests import fixtures` both resolve.
   test)    shift; exec python3 -m unittest discover -s tests -t . -v "$@" ;;
-  *) echo "usage: $0 {extract|prepare|vendor|emit|serve|test} [args]" >&2; exit 2 ;;
+  *) echo "usage: $0 {extract|prepare|vendor|footprints|emit|serve|test} [args]" >&2; exit 2 ;;
 esac

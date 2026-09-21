@@ -1,34 +1,20 @@
 """Fetch every EMIT L2A reflectance footprint over CONUS from NASA's CMR.
 
-Run by ./run.sh emit. This is one of the project's few sanctioned network
-steps; the interface never touches the network. Each run refetches in full
-(about fifteen requests of 2,000 granules) and rewrites the file atomically.
+Run by ./run.sh footprints (and its alias ./run.sh emit). Each run refetches
+in full, about fifteen requests of 2,000 granules, and rewrites the file
+atomically. Coincidence with ECOSTRESS is computed afterwards by
+viz/coincidence.py.
 """
 
-import json
-import os
 import sys
-import time
-import urllib.request
-from pathlib import Path
 
-from viz import paths
+from viz import cmr, paths
+from viz.cmr import fetch_all, write_geojson  # re-exported for tests and callers
 
-CMR_URL = "https://cmr.earthdata.nasa.gov/search/granules.json"
 SHORT_NAME = "EMITL2ARFL"
-BBOX = "-125,24.4,-66.9,49.4"
-PAGE_SIZE = 2000
 
 _BROWSE = "/browse#"
 _DATA = "/data#"
-
-
-def _link(entry, suffix):
-    for link in entry.get("links", []):
-        href = link.get("href", "")
-        if link.get("rel", "").endswith(suffix) and href.startswith("http"):
-            return href
-    return None
 
 
 def entry_to_feature(entry):
@@ -53,47 +39,14 @@ def entry_to_feature(entry):
             "end": entry.get("time_end"),
             "cloud": float(cloud) if cloud not in (None, "") else None,
             "year": int(start[:4]) if start else None,
-            "browse": _link(entry, _BROWSE),
-            "data": _link(entry, _DATA),
+            "browse": cmr.link(entry, _BROWSE),
+            "data": cmr.link(entry, _DATA),
         },
     }
 
 
 def fetch_page(page_num):
-    """Entries from one CMR page. Retries transient failures three times."""
-    url = (f"{CMR_URL}?short_name={SHORT_NAME}&bounding_box={BBOX}"
-           f"&page_size={PAGE_SIZE}&page_num={page_num}")
-    for attempt in range(3):
-        try:
-            with urllib.request.urlopen(url, timeout=120) as response:
-                return json.load(response)["feed"]["entry"]
-        except (OSError, ValueError, KeyError) as exc:
-            if attempt == 2:
-                raise
-            print(f"page {page_num}: {exc}; retrying", file=sys.stderr)
-            time.sleep(2 * (attempt + 1))
-
-
-def fetch_all(fetch_page_fn):
-    """Every entry, paging until a page comes back empty."""
-    entries = []
-    page = 1
-    while True:
-        got = fetch_page_fn(page)
-        if not got:
-            return entries
-        entries.extend(got)
-        print(f"page {page}: {len(got)} granules (total {len(entries)})", flush=True)
-        page += 1
-
-
-def write_geojson(features, path):
-    """Write a FeatureCollection via a .part file and an atomic rename."""
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    part = path.with_name(path.name + ".part")
-    part.write_text(json.dumps({"type": "FeatureCollection", "features": features}))
-    os.replace(part, path)
+    return cmr.fetch_page(cmr.page_url(SHORT_NAME, page_num))
 
 
 def main(argv=None):
