@@ -656,7 +656,7 @@ In `viz/tileserver.py`:
 
 1. Import: change `from viz import color, naming, paths, rasters` to `from viz import color, emit, naming, paths, rasters`.
 
-2. In `point_report`, change the signature to `def point_report(lon, lat, crop, year, cdl_year, week=None):` and, before the `return {`, add:
+2. In `point_report`, change the signature to `def point_report(lon, lat, crop, year, cdl_year, week=None):`. The existing series loop is `for week in weeks:`, which would shadow the new parameter and make `week_sunday` come from the last CPC week instead of the query; rename that loop variable to `cpc_week` (the series output key stays `"week"`). Then, before the `return {`, add:
 
 ```python
     index = emit.index_for(paths.EMIT_FOOTPRINTS)
