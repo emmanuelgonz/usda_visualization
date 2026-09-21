@@ -158,7 +158,12 @@ def point_report(lon, lat, crop, year, cdl_year, week=None):
 
     index = emit.index_for(paths.EMIT_FOOTPRINTS)
     granules = index.covering(lon, lat) if index else []
-    sunday = emit.week_sunday(year, week).isoformat() if week else None
+    sunday = None
+    if week:
+        try:
+            sunday = emit.week_sunday(year, week).isoformat()
+        except ValueError:
+            sunday = None
 
     return {
         "lon": lon,
@@ -296,6 +301,8 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             return self._fail(HTTPStatus.BAD_REQUEST,
                                "lon, lat, year, cdl_year must be numeric")
+        if week is not None and not (1 <= week <= 53):
+            return self._fail(HTTPStatus.BAD_REQUEST, "week must be 1-53")
         report = point_report(lon, lat, query["crop"][0], year, cdl_year, week)
         self._send(json.dumps(report).encode(), CONTENT_TYPES[".json"])
 

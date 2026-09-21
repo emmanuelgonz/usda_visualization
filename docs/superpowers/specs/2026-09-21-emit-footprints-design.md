@@ -57,8 +57,7 @@ granules cover a clicked point.
 | --- | --- |
 | `viz/fetch_emit.py` | Pages CMR and writes `data/emit/footprints.geojson` |
 | `viz/emit.py` | Loads the footprints once and answers point-in-polygon queries |
-| `viz/tileserver.py` | Serves the footprints file; adds an `emit` array to `/api/point` |
-| `viz/tileserver.py` | Computes `emit_count` and `emit_fetched` from the file at request time |
+| `viz/tileserver.py` | Serves the footprints file; adds `emit` and `week_sunday` to `/api/point`; computes `emit_count` and `emit_fetched` from the file at request time |
 | `viz/web/` | Footprint layer, two sliders, legend block, popup section |
 
 ### 4.1 Fetch
@@ -102,7 +101,7 @@ ten thousand paths, in a pane between the CPC layer and the state boundaries, as
 fill at weight 1, coloured by acquisition year through five categorical hues chosen at
 implementation to stay distinct from the CDL crop colours and the CPC ramp. Scenes whose cloud
 cover exceeds the threshold are not drawn. When the window is active, scenes whose `start` lies
-within ±N days of the selected CPC week's Sunday draw in one strong highlight colour at weight 2;
+within ±N days of the selected CPC week's Sunday draw in one strong highlight colour at weight 2.5;
 all others stay in their faint year colour. A legend block lists the year colours and the
 highlight. The footprints are interactive so hovering shows a tooltip with date and cloud cover,
 while the map click still opens the readout popup.

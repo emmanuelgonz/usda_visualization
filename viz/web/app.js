@@ -225,17 +225,17 @@
     return [centre - span, centre + span];
   }
 
-  function emitStyle(feature) {
-    var p = feature.properties;
-    if (p.cloud !== null && p.cloud > state.emitCloud) { return { stroke: false, fill: false }; }
-    var bounds = emitWindowBounds();
-    var t = Date.parse(p.start);
-    var inWindow = bounds && t >= bounds[0] && t <= bounds[1];
-    return {
-      renderer: emitRenderer, fill: false,
-      color: inWindow ? EMIT_HIGHLIGHT : (EMIT_YEAR_COLOURS[p.year] || "#666"),
-      weight: inWindow ? 2.5 : 1,
-      opacity: inWindow ? 0.95 : (bounds ? 0.35 : 0.8)
+  function emitStyleFor(bounds) {
+    return function (feature) {
+      var p = feature.properties;
+      var hidden = p.cloud !== null && p.cloud > state.emitCloud;
+      var inWindow = !!(bounds && p._t >= bounds[0] && p._t <= bounds[1]);
+      return {
+        stroke: !hidden, fill: false, interactive: !hidden,
+        color: inWindow ? EMIT_HIGHLIGHT : (EMIT_YEAR_COLOURS[p.year] || "#666"),
+        weight: inWindow ? 2.5 : 1,
+        opacity: inWindow ? 0.95 : (bounds ? 0.35 : 0.8)
+      };
     };
   }
 
@@ -244,9 +244,10 @@
     emitLoaded = true;
     fetch("/api/emit/footprints.geojson").then(function (r) { return r.json(); }).then(function (geo) {
       emitLayer = L.geoJSON(geo, {
-        pane: "emit", renderer: emitRenderer, style: emitStyle,
+        pane: "emit", renderer: emitRenderer, style: emitStyleFor(emitWindowBounds()),
         onEachFeature: function (f, layer) {
           var p = f.properties;
+          f.properties._t = Date.parse(f.properties.start);
           layer.bindTooltip(p.start.slice(0, 10) + " · " + (p.cloud === null ? "?" : p.cloud + "%") + " cloud",
                             { sticky: true, className: "emit-tip" });
         }
@@ -273,7 +274,7 @@
     if (state.emit) {
       if (!emitLayer) { loadEmit(); return; }
       if (!map.hasLayer(emitLayer)) { emitLayer.addTo(map); }
-      emitLayer.setStyle(emitStyle);
+      emitLayer.setStyle(emitStyleFor(emitWindowBounds()));
     }
   }
 

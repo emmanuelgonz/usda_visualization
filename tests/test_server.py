@@ -1,6 +1,8 @@
 import json
+import re
 import shutil
 import struct
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -287,6 +289,21 @@ class TestEmitRoutes(ServerTestCase):
     def test_point_without_week_has_null_week_sunday(self):
         self.assertIsNone(json.loads(self.get(self.point_url())[2])["week_sunday"])
 
+    def test_non_numeric_week_returns_400(self):
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.get(self.point_url() + "&week=abc")
+        self.assertEqual(ctx.exception.code, 400)
+
+    def test_out_of_range_week_returns_400(self):
+        for bad in (0, 54, 99):
+            with self.subTest(week=bad), self.assertRaises(urllib.error.HTTPError) as ctx:
+                self.get(self.point_url() + f"&week={bad}")
+            self.assertEqual(ctx.exception.code, 400)
+
+    def test_week_53_in_a_52_week_year_yields_null_sunday(self):
+        report = json.loads(self.get(self.point_url() + "&week=53")[2])
+        self.assertIsNone(report["week_sunday"])   # 2024 has 52 ISO weeks
+
     def test_missing_footprints_file_gives_404_and_empty_emit(self):
         moved = paths.EMIT_FOOTPRINTS.with_name("moved.geojson")
         paths.EMIT_FOOTPRINTS.rename(moved)
@@ -443,9 +460,17 @@ class TestInterfaceAssets(ServerTestCase):
         self.assertIn("/api/emit/footprints.geojson", text)
         self.assertIn("L.canvas(", text)
         self.assertIn("EMIT_YEAR_COLOURS", text)
-        self.assertIn("2024-04-14", text)  # the week-mapping anchor, mirrored from viz/emit.py
         self.assertIn("&week=", text)
         self.assertIn("EMIT scenes covering this point", text)
+
+        if not shutil.which("node"):
+            self.skipTest("node not available")
+        match = re.search(r"function weekSunday\(year, week\) \{.*?\n  \}", text, re.S)
+        self.assertIsNotNone(match, "weekSunday function not found in app.js")
+        script = match.group(0) + "\nconsole.log(weekSunday(2024, 15).toISOString().slice(0, 10));"
+        result = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "2024-04-14")
 
 
 if __name__ == "__main__":
