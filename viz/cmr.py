@@ -1,7 +1,7 @@
 """Shared access to NASA's Common Metadata Repository granule search.
 
-Used by the EMIT and ECOSTRESS fetch scripts. These are the project's only
-network steps; the interface never touches the network.
+Used by the EMIT, ECOSTRESS, and HLS fetch scripts. These are the project's
+only network steps; the interface never touches the network.
 """
 
 import json
@@ -40,6 +40,34 @@ def fetch_page(url):
                 raise
             print(f"{url[-40:]}: {exc}; retrying", file=sys.stderr)
             time.sleep(2 * (attempt + 1))
+
+
+def fetch_response(url):
+    """(body bytes, response headers) from one URL. Retries transient failures three times."""
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(url, timeout=120) as response:
+                return response.read(), response.headers
+        except OSError as exc:
+            if attempt == 2:
+                raise
+            print(f"{url[-40:]}: {exc}; retrying", file=sys.stderr)
+            time.sleep(2 * (attempt + 1))
+
+
+def polygon_ring(entry):
+    """The entry's first polygon as a closed [lon, lat] ring, or None.
+
+    CMR lists latitude then longitude; GeoJSON wants longitude then latitude.
+    """
+    polygons = entry.get("polygons")
+    if not polygons or not polygons[0]:
+        return None
+    numbers = [float(v) for v in polygons[0][0].split()]
+    ring = [[numbers[i + 1], numbers[i]] for i in range(0, len(numbers), 2)]
+    if ring[0] != ring[-1]:
+        ring.append(ring[0])
+    return ring
 
 
 def fetch_all(fetch_page_fn):

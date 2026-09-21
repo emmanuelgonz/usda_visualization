@@ -30,12 +30,21 @@ case "${1:-}" in
     ;;
   footprints|emit)
     # Fetches EMIT L2A footprints and ECOSTRESS swath boxes over CONUS from
-    # NASA's CMR (no login), then pairs them. Rerun to refresh. Network access.
-    # "emit" is kept as an alias; both names run all three steps.
+    # NASA's CMR (no login), pairs them, then refreshes the HLS store.
+    # Rerun to refresh. Network access. "emit" is kept as an alias.
     shift
     python3 -m viz.fetch_emit "$@"
     python3 -m viz.fetch_eco "$@"
     python3 -m viz.coincidence "$@"
+    python3 -m viz.fetch_hls
+    ;;
+  hls)
+    # Fetches HLSL30 and HLSS30 v2.0 granule metadata (2022 onward) into
+    # data/hls/hls.sqlite, one CSV query per collection-month. The first run is
+    # about 635 pages and 15-25 minutes; reruns skip frozen months. Accepts
+    # --from YYYY-MM for a shorter first run. Network access.
+    shift
+    exec python3 -m viz.fetch_hls "$@"
     ;;
   serve)
     shift
@@ -49,10 +58,13 @@ case "${1:-}" in
     if [ ! -f data/eco/footprints.geojson ]; then
       echo "note: no ECOSTRESS footprints (data/eco/footprints.geojson); the ECOSTRESS layer is off until ./run.sh footprints is run" >&2
     fi
+    if [ ! -f data/hls/hls.sqlite ]; then
+      echo "note: no HLS store (data/hls/hls.sqlite); the HLS layer is off until ./run.sh hls is run" >&2
+    fi
     exec python3 -m viz.tileserver "$@"
     ;;
   # -t . keeps the repo root as the top-level import dir so `from viz import ...`
   # and `from tests import fixtures` both resolve.
   test)    shift; exec python3 -m unittest discover -s tests -t . -v "$@" ;;
-  *) echo "usage: $0 {extract|prepare|vendor|footprints|emit|serve|test} [args]" >&2; exit 2 ;;
+  *) echo "usage: $0 {extract|prepare|vendor|footprints|emit|hls|serve|test} [args]" >&2; exit 2 ;;
 esac
