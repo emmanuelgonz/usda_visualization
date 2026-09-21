@@ -103,6 +103,22 @@ class TestStoreWrites(StoreTestCase):
         names = {r[0] for r in self.store.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         self.assertEqual(names, {"acq", "tiles", "months"})
 
+    def test_schema_pins_the_covering_indexes(self):
+        # counts() reads date, cloud and tile; acquisitions() reads tile, date,
+        # cloud, sensor and time. Both must be answered from the index alone.
+        names = {r[0] for r in self.store.conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+        self.assertEqual(names, {"acq_date", "acq_date_cloud_tile", "acq_tile_date_cover",
+                                 "sqlite_autoindex_acq_1", "sqlite_autoindex_months_1",
+                                 "sqlite_autoindex_tiles_1"})
+
+    def test_reopening_drops_the_superseded_tile_date_index(self):
+        self.store.conn.executescript("CREATE INDEX IF NOT EXISTS acq_tile_date ON acq(tile, date);")
+        reopened = hls.Store(self.store.path)
+        self.addCleanup(reopened.close)
+        names = {r[0] for r in reopened.conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+        self.assertNotIn("acq_tile_date", names)
+        self.assertIn("acq_tile_date_cover", names)
+
     def test_replace_month_is_idempotent(self):
         self.store.replace_month("S30", "2025-07", [r for r in self.rows if r["sensor"] == "S30"],
                                  "2025-08-03T00:00:00+00:00")
@@ -172,6 +188,37 @@ class TestTileIndex(StoreTestCase):
         self.assertEqual(index.covering(-93.2, 42.5), ["T15TVH", "T15TWH"])   # the overlap strip
         self.assertEqual(index.covering(-93.9, 42.5), ["T15TVH"])
         self.assertEqual(index.covering(-90.0, 42.5), [])
+
+    def test_store_for_closes_the_cached_entry_when_the_file_disappears(self):
+        moved = self.store.path.with_name("moved.sqlite")
+        entry = hls.store_for(self.store.path)
+        self.store.path.rename(moved)
+        try:
+            self.assertIsNone(hls.store_for(self.store.path))
+            with self.assertRaises(Exception):
+                entry[0].conn.execute("SELECT 1")
+        finally:
+            moved.rename(self.store.path)
+        self.assertIsNot(hls.store_for(self.store.path)[0], entry[0])
+
+    def test_store_for_raises_busy_while_a_fetch_holds_the_write_lock(self):
+        # Building the tile index reads the tiles table, so the reopen is what
+        # hits the lock; the server catches hls.BUSY and degrades the route.
+        import os, sqlite3, time
+        hls.store_for(self.store.path)
+        self.store.put_tile("T15TVH", SQUARE)
+        os.utime(self.store.path, ns=(time.time_ns() + 10 ** 9, time.time_ns() + 10 ** 9))
+        blocker = sqlite3.connect(str(self.store.path), timeout=0.1)
+        self.addCleanup(blocker.close)
+        blocker.execute("BEGIN EXCLUSIVE")
+        started = time.monotonic()
+        try:
+            with self.assertRaises(hls.BUSY):
+                hls.store_for(self.store.path)
+            self.assertLess(time.monotonic() - started, 2.0)   # half a second, not the default five
+        finally:
+            blocker.rollback()
+        self.assertEqual(hls.store_for(self.store.path)[1].covering(-93.5, 42.5), ["T15TVH"])
 
     def test_store_for_returns_none_when_absent_and_reopens_on_change(self):
         self.assertIsNone(hls.store_for(self.tmp / "nope.sqlite"))

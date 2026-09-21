@@ -22,6 +22,10 @@ SENSORS = ("L30", "S30")
 FIRST_MONTH = "2022-01"
 FROZEN_AFTER_DAYS = 60
 
+# Raised by a read when a fetch holds the write lock, so the server can degrade
+# an HLS response without importing sqlite3 itself.
+BUSY = sqlite3.OperationalError
+
 _UR_RE = re.compile(r"^HLS\.(L30|S30)\.(T[0-9]{2}[A-Z]{3})\.")
 
 
@@ -93,7 +97,9 @@ CREATE TABLE IF NOT EXISTS acq (
   cloud INTEGER
 );
 CREATE INDEX IF NOT EXISTS acq_date ON acq(date);
-CREATE INDEX IF NOT EXISTS acq_tile_date ON acq(tile, date);
+CREATE INDEX IF NOT EXISTS acq_date_cloud_tile ON acq(date, cloud, tile);
+CREATE INDEX IF NOT EXISTS acq_tile_date_cover ON acq(tile, date, cloud, sensor, time);
+DROP INDEX IF EXISTS acq_tile_date;
 CREATE TABLE IF NOT EXISTS tiles (
   tile TEXT PRIMARY KEY,
   ring TEXT NOT NULL
@@ -112,13 +118,16 @@ class Store:
     """One connection to the HLS database.
 
     Writable by default (creates the file and schema); read_only for the
-    server, which must never create an empty database by accident.
+    server, which must never create an empty database by accident. A read-only
+    connection waits half a second for the write lock rather than the default
+    five, so a request made while a fetch commits a month raises BUSY quickly
+    enough for the route to degrade instead of stalling.
     """
 
     def __init__(self, path, read_only=False):
         self.path = Path(path)
         if read_only:
-            self.conn = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True)
+            self.conn = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True, timeout=0.5)
         else:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self.conn = sqlite3.connect(str(self.path))
@@ -216,17 +225,29 @@ class TileIndex:
 _local = threading.local()
 
 
+def _drop_cached():
+    """Close this thread's cached store, clearing the slot first so a failed reopen leaves nothing behind."""
+    cached = getattr(_local, "entry", None)
+    _local.entry = None
+    if cached is not None:
+        cached[1][0].close()
+
+
 def store_for(path):
-    """(Store, TileIndex) for this thread, read-only, reopened when the file changes; None if absent."""
+    """(Store, TileIndex) for this thread, read-only, reopened when the file changes; None if absent.
+
+    Raises BUSY when a fetch holds the write lock, since building the tile
+    index reads the tiles table.
+    """
     path = Path(path)
     if not path.is_file():
+        _drop_cached()
         return None
     key = (str(path), os.stat(path).st_mtime_ns)
     cached = getattr(_local, "entry", None)
     if cached is not None and cached[0] == key:
         return cached[1]
-    if cached is not None:
-        cached[1][0].close()
+    _drop_cached()
     store = Store(path, read_only=True)
     entry = (store, TileIndex(store))
     _local.entry = (key, entry)
