@@ -52,6 +52,16 @@
       <label class="inline"><input type="radio" name="dim" value="grey"> Grey</label>
     </div>
     <label class="inline"><input type="checkbox" id="states" checked> State boundaries</label>
+    <label class="inline"><input type="checkbox" id="emit"> EMIT footprints</label>
+    <div class="sub" id="emitControls">
+      <label>Max cloud cover <output id="emitCloudOut">30%</output>
+        <input type="range" id="emitCloud" min="0" max="100" step="5" value="30">
+      </label>
+      <label>Window ±days <output id="emitWindowOut">7</output>
+        <input type="range" id="emitWindow" min="0" max="30" step="1" value="7">
+      </label>
+      <div id="emitLegend"></div>
+    </div>
     <label>CDL opacity <output id="cdlOpacityOut">100%</output>
       <input type="range" id="cdlOpacity" min="0" max="100" step="5" value="100">
     </label>

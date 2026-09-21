@@ -433,6 +433,20 @@ class TestInterfaceAssets(ServerTestCase):
             self.get("/static/../../viz/tileserver.py")
         self.assertIn(ctx.exception.code, (400, 403, 404))
 
+    def test_emit_layer_controls_and_canvas_renderer(self):
+        _, _, index = self.get("/")
+        html = index.decode()
+        for ident in ('id="emit"', 'id="emitCloud"', 'id="emitWindow"', 'id="emitLegend"'):
+            self.assertIn(ident, html)
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        self.assertIn("/api/emit/footprints.geojson", text)
+        self.assertIn("L.canvas(", text)
+        self.assertIn("EMIT_YEAR_COLOURS", text)
+        self.assertIn("2024-04-14", text)  # the week-mapping anchor, mirrored from viz/emit.py
+        self.assertIn("&week=", text)
+        self.assertIn("EMIT scenes covering this point", text)
+
 
 if __name__ == "__main__":
     unittest.main()
