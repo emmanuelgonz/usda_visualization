@@ -5,7 +5,8 @@ collection-month is one CSV query paged by the CMR-Hits header, because CMR
 caps paging depth at one million rows per query and the JSON endpoint is
 five times heavier than CSV. Months fetched well after they ended are frozen
 and skipped, so a rerun touches only recent months. Tile rings are filled
-once per tile from a JSON pattern query.
+once per tile from a JSON pattern query: about 1,200 tiles cover CONUS, so a
+first run spends roughly ten minutes on them and later runs none.
 """
 
 import argparse
@@ -46,8 +47,11 @@ def now_iso():
 def fetch_month(short_name, month, fetch_fn=cmr.fetch_response):
     """Every row of one collection-month, paged by CMR-Hits, limited to the month's dates.
 
-    Raises ValueError if the response has no usable CMR-Hits header, so a
-    malformed response never gets recorded as a completed fetch.
+    Raises ValueError if the response has no usable CMR-Hits header, or if the
+    pages together deliver fewer parsed rows than CMR-Hits promised, so neither
+    a malformed response nor a short page is recorded as a completed fetch and
+    frozen. A row parse_csv drops for an unreadable granule UR counts as a
+    short delivery too.
     """
     url = csv_url(short_name, month, 1)
     body, headers = fetch_fn(url)
@@ -60,6 +64,9 @@ def fetch_month(short_name, month, fetch_fn=cmr.fetch_response):
     for page in range(2, pages + 1):
         body, _ = fetch_fn(csv_url(short_name, month, page))
         rows.extend(hls.parse_csv(body.decode("utf-8")))
+    if len(rows) < hits:
+        raise ValueError(f"{short_name} {month}: CMR reported {hits} granules "
+                         f"but delivered {len(rows)}")
     start, end = hls.month_bounds(month)
     return [r for r in rows if start <= r["date"] < end]
 

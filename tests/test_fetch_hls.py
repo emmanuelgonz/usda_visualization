@@ -99,6 +99,32 @@ class TestFetchMonth(unittest.TestCase):
             fetch_hls.fetch_month("HLSS30", "2025-07", fetch_fn=fake)
         self.assertEqual(len(asked), 1)
 
+    def test_a_short_page_raises_so_the_month_is_never_recorded(self):
+        # CMR reported four granules but page 2 carried one; recording the month
+        # would freeze the gap in place for sixty days.
+        pages = {
+            1: csv_rows(("HLS.S30.T15TVH.2025199T170000.v2.0", "2025-07-18T17:00:00Z", 10),
+                        ("HLS.S30.T15TVH.2025200T170000.v2.0", "2025-07-19T17:00:00Z", 20)),
+            2: csv_rows(("HLS.S30.T15TVH.2025201T170000.v2.0", "2025-07-20T17:00:00Z", 30)),
+        }
+
+        def fake(url):
+            return pages[int(url.rsplit("page_num=", 1)[1])].encode(), {"CMR-Hits": "4"}
+
+        with patch_page_size(2), self.assertRaises(ValueError) as ctx:
+            fetch_hls.fetch_month("HLSS30", "2025-07", fetch_fn=fake)
+        self.assertEqual(str(ctx.exception),
+                         "HLSS30 2025-07: CMR reported 4 granules but delivered 3")
+
+    def test_an_unparseable_row_also_counts_as_a_short_delivery(self):
+        def fake(url):
+            body = csv_rows(("HLS.S30.T15TVH.2025199T170000.v2.0", "2025-07-18T17:00:00Z", 10)) + \
+                   "NOT.AN.HLS.UR,x,2025-07-19T17:00:00Z,,,,5,DAY,1\n"
+            return body.encode(), {"CMR-Hits": "2"}
+
+        with self.assertRaises(ValueError):
+            fetch_hls.fetch_month("HLSS30", "2025-07", fetch_fn=fake)
+
 
 class TestFetchRing(unittest.TestCase):
     def test_takes_the_first_polygon_from_the_first_collection_that_has_one(self):
@@ -120,6 +146,8 @@ class TestFetchRing(unittest.TestCase):
 
 class TestMain(unittest.TestCase):
     def test_skips_frozen_months_and_fills_missing_rings(self):
+        import contextlib
+        import io
         import shutil
         import tempfile
         from pathlib import Path
@@ -152,7 +180,8 @@ class TestMain(unittest.TestCase):
         with mock.patch.object(fetch_hls, "fetch_month", fake_month), \
              mock.patch.object(fetch_hls, "fetch_ring", fake_ring), \
              mock.patch.object(fetch_hls, "current_month", lambda: "2025-06"), \
-             mock.patch.object(fetch_hls.paths, "HLS_DB", db):
+             mock.patch.object(fetch_hls.paths, "HLS_DB", db), \
+             contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(fetch_hls.main(["--from", "2025-05"]), 0)
 
         self.assertEqual(sorted(fetched), [("HLSL30", "2025-06"), ("HLSS30", "2025-06")])

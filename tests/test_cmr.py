@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import shutil
 import tempfile
@@ -33,7 +35,9 @@ class TestFetchAll(unittest.TestCase):
             asked.append(page_num)
             return pages.get(page_num, [])
 
-        self.assertEqual(len(cmr.fetch_all(fake)), 3)
+        with contextlib.redirect_stdout(io.StringIO()):   # the paging progress lines
+            entries = cmr.fetch_all(fake)
+        self.assertEqual(len(entries), 3)
         self.assertEqual(asked, [1, 2, 3])
 
 
