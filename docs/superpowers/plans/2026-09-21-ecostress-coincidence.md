@@ -1048,8 +1048,11 @@ Append:
     var sign = seconds < 0 ? "−" : "+";
     var s = Math.abs(seconds);
     if (s < 60) { return sign + s + " s"; }
-    if (s < 3600) { return sign + Math.round(s / 60) + " m"; }
-    return sign + Math.floor(s / 3600) + " h " + Math.round((s % 3600) / 60) + " m";
+    // Round to whole minutes FIRST, then split, so 7199 s is "+2 h 0 m",
+    // never "+1 h 60 m", and 3599 s is "+1 h 0 m", never "+60 m".
+    var totalM = Math.round(s / 60);
+    if (totalM < 60) { return sign + totalM + " m"; }
+    return sign + Math.floor(totalM / 60) + " h " + (totalM % 60) + " m";
   }
 
   function stepLabel(step) {
