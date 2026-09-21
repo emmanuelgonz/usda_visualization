@@ -1074,7 +1074,7 @@ Append:
       var yearColour = EMIT_YEAR_COLOURS[p.year] || "#666";
       return {
         stroke: !hidden, interactive: !hidden,
-        fill: coincident, fillColor: yearColour, fillOpacity: coincident ? 0.25 : 0,
+        fill: coincident && !hidden, fillColor: yearColour, fillOpacity: (coincident && !hidden) ? 0.25 : 0,
         color: inWindow ? EMIT_HIGHLIGHT : yearColour,
         weight: inWindow ? 2.5 : 1,
         opacity: inWindow ? 0.95 : (bounds ? 0.35 : 0.8)
@@ -1151,13 +1151,17 @@ Append:
     if (!state.coincide && state.coincideOnly) { state.coincideOnly = false; el("coincideOnly").checked = false; }
 ```
 
-6. In `drawEmitLegend`, append one more legend entry after the "within window" span:
+6. Replace `drawEmitLegend` in full:
 
 ```javascript
-      + '<span class="hl" style="--swatch:#8b45d9">filled = ECOSTRESS coincident</span>'
+  function drawEmitLegend() {
+    var years = Object.keys(EMIT_YEAR_COLOURS).sort();
+    el("emitLegend").innerHTML =
+      years.map(function (y) { return '<span style="--swatch:' + EMIT_YEAR_COLOURS[y] + '">' + y + "</span>"; }).join("") +
+      '<span class="hl" style="--swatch:' + EMIT_HIGHLIGHT + '">within window</span>' +
+      '<span class="hl" style="--swatch:#8b45d9">filled = ECOSTRESS coincident</span>';
+  }
 ```
-
-(adjust the concatenation so it remains one expression).
 
 7. In `refresh()`, after `syncEmit();` add `syncEco();`.
 
