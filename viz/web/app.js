@@ -19,7 +19,8 @@
     timer: null,
     emit: false,
     emitCloud: 30,
-    emitWindow: 7
+    emitWindow: 7,
+    emitOnlyWindow: false
   };
 
   // Hardcoded so the first paint fits CONUS before the boundary file loads.
@@ -230,8 +231,9 @@
   function emitStyleFor(bounds) {
     return function (feature) {
       var p = feature.properties;
-      var hidden = p.cloud !== null && p.cloud > state.emitCloud;
       var inWindow = !!(bounds && p._t >= bounds[0] && p._t <= bounds[1]);
+      var hidden = (p.cloud !== null && p.cloud > state.emitCloud) ||
+                   (state.emitOnlyWindow && bounds && !inWindow);
       return {
         stroke: !hidden, fill: false, interactive: !hidden,
         color: inWindow ? EMIT_HIGHLIGHT : (EMIT_YEAR_COLOURS[p.year] || "#666"),
@@ -272,6 +274,10 @@
     box.parentNode.title = available ? "" : "No EMIT footprints; run ./run.sh emit";
     el("emitControls").classList.toggle("disabled", !(available && state.emit));
     el("emitCloud").disabled = el("emitWindow").disabled = !(available && state.emit);
+    // "Only within window" needs a window to filter by.
+    var onlyOk = available && state.emit && state.emitWindow > 0;
+    el("emitOnlyWindow").disabled = !onlyOk;
+    if (!onlyOk && state.emitOnlyWindow) { state.emitOnlyWindow = false; el("emitOnlyWindow").checked = false; }
     if (!state.emit && emitLayer && map.hasLayer(emitLayer)) { map.removeLayer(emitLayer); }
     if (state.emit) {
       if (!emitLayer) { loadEmit(); return; }
@@ -529,6 +535,9 @@
     el("emit").addEventListener("change", function (e) { state.emit = e.target.checked; syncEmit(); });
     el("emitCloud").addEventListener("input", function (e) {
       state.emitCloud = Number(e.target.value); el("emitCloudOut").textContent = e.target.value + "%"; syncEmit();
+    });
+    el("emitOnlyWindow").addEventListener("change", function (e) {
+      state.emitOnlyWindow = e.target.checked; syncEmit();
     });
     el("emitWindow").addEventListener("input", function (e) {
       state.emitWindow = Number(e.target.value);

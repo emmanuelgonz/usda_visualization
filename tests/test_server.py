@@ -428,6 +428,14 @@ class TestInterfaceAssets(ServerTestCase):
         self.assertNotIn("setUrl(", body)
         self.assertIn("map.removeLayer(cpcLayer)", body)
 
+    def test_emit_within_window_only_toggle(self):
+        _, _, index = self.get("/")
+        self.assertIn('id="emitOnlyWindow"', index.decode())
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        body = text[text.index("function emitStyleFor"):text.index("function loadEmit")]
+        self.assertIn("state.emitOnlyWindow", body)
+
     def test_index_loads_vendored_leaflet_not_a_cdn(self):
         _, _, body = self.get("/")
         text = body.decode()
