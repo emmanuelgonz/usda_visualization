@@ -212,7 +212,8 @@ def point_report(lon, lat, crop, year, cdl_year, week=None, hls_params=None):
         series[var] = points
 
     index = emit.index_for(paths.EMIT_FOOTPRINTS)
-    granules = [dict(g) for g in index.covering(lon, lat)] if index else []
+    # Copies, so tagging never touches the shared index; hls_near is the map-only pairing list.
+    granules = [{k: v for k, v in g.items() if k != "hls_near"} for g in index.covering(lon, lat)] if index else []
     eco_index = emit.index_for(paths.ECO_FOOTPRINTS)
     eco_swaths = eco_index.covering(lon, lat) if eco_index else []
     sunday = None
@@ -306,6 +307,7 @@ class Handler(BaseHTTPRequestHandler):
                 eco_index = emit.index_for(paths.ECO_FOOTPRINTS)
                 catalog["eco_count"] = eco_index.count if eco_index else 0
                 catalog["eco_fetched"] = eco_index.fetched if eco_index else None
+                catalog["emit_hls_paired"] = index.count_where(lambda p: bool(p.get("hls_near"))) if index else 0
                 catalog["coincident_15min"] = index.count_where(
                     lambda p: bool(p.get("eco")) and abs(p["eco"][0]["dt"]) <= coincidence.SAME_PASS
                 ) if index else 0

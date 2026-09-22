@@ -23,6 +23,7 @@
     emitOnlyWindow: false,
     coincide: false,
     coincideStep: 2,
+    coincideAll: false,
     coincideOnly: false,
     eco: false,
     ecoDay: "DAY",
@@ -89,6 +90,26 @@
   }
 
   function coincideSeconds() { return COINCIDE_STEPS[state.coincideStep] * 60; }
+
+  // EMIT features carry the HLS acquisitions of their tile within ±HLS_PAIR_DAYS
+  // (viz/hls_pairs.py), so the marking clamps the shared window to that span.
+  var HLS_PAIR_DAYS = 15;
+  var HLS_PAIR_FILL = "#762a83";
+
+  // True when the scene has a stored HLS acquisition inside the shared window
+  // that passes the HLS cloud threshold and sensor filter.
+  function hlsPaired(p) {
+    var days = Math.min(state.days, HLS_PAIR_DAYS);
+    var list = p.hls_near || [];
+    for (var i = 0; i < list.length; i++) {
+      var h = list[i];
+      if (Math.abs(h.dt) > days) { continue; }
+      if (h.cloud === null || h.cloud === undefined || h.cloud > state.hlsCloud) { continue; }
+      if (state.hlsSensor !== "ALL" && h.sensor !== state.hlsSensor) { continue; }
+      return true;
+    }
+    return false;
+  }
 
   function formatDt(seconds) {
     var sign = seconds < 0 ? "−" : "+";
@@ -319,14 +340,19 @@
       var p = feature.properties;
       var inWindow = !!(bounds && p._t >= bounds[0] && p._t <= bounds[1]);
       var nearest = p.eco && p.eco.length ? p.eco[0].dt : null;
-      var coincident = state.coincide && nearest !== null && Math.abs(nearest) <= maxDt;
+      var ecoHit = nearest !== null && Math.abs(nearest) <= maxDt;
+      var triple = state.coincideAll && ecoHit && hlsPaired(p);
+      var coincident = state.coincide && ecoHit;
+      var marked = triple || coincident;
+      var anyMark = state.coincide || state.coincideAll;
       var hidden = (p.cloud !== null && p.cloud > state.emitCloud) ||
                    (state.emitOnlyWindow && bounds && !inWindow) ||
-                   (state.coincide && state.coincideOnly && !coincident);
+                   (anyMark && state.coincideOnly && !marked);
       var yearColour = EMIT_YEAR_COLOURS[p.year] || "#666";
       return {
         stroke: !hidden, interactive: !hidden,
-        fill: coincident && !hidden, fillColor: yearColour, fillOpacity: (coincident && !hidden) ? 0.25 : 0,
+        fill: marked && !hidden, fillColor: triple ? HLS_PAIR_FILL : yearColour,
+        fillOpacity: !marked || hidden ? 0 : (triple ? 0.35 : 0.25),
         color: inWindow ? EMIT_HIGHLIGHT : yearColour,
         weight: inWindow ? 2.5 : 1,
         opacity: inWindow ? 0.95 : (bounds ? 0.35 : 0.8)
@@ -356,7 +382,9 @@
     el("emitLegend").innerHTML =
       years.map(function (y) { return '<span style="--swatch:' + EMIT_YEAR_COLOURS[y] + '">' + y + "</span>"; }).join("") +
       '<span class="hl" style="--swatch:' + EMIT_HIGHLIGHT + '">within window</span>' +
-      (state.catalog.eco_count > 0 ? '<span class="fillsw">filled = ECOSTRESS coincident</span>' : "");
+      (state.catalog.eco_count > 0 ? '<span class="fillsw">filled = ECOSTRESS coincident</span>' : "") +
+      (state.catalog.eco_count > 0 && state.catalog.emit_hls_paired > 0
+        ? '<span class="fillsw hls">purple = ECOSTRESS + HLS coincident</span>' : "");
   }
 
   function ecoStyleFor(bounds) {
@@ -454,6 +482,11 @@
 
   function drawHlsLegend() {
     var range = hlsRange();
+    if (!state.hls) {
+      el("hlsRange").textContent = "";
+      el("hlsLegend").innerHTML = "";
+      return;
+    }
     el("hlsRange").textContent = range
       ? (state.hlsMode === "season" ? "Season " : "Window ") + range.start + " to " + range.end
       : "No CPC weeks for this selection";
@@ -476,15 +509,19 @@
       : state.catalog.hls_count > 0 ? "HLS tile rings not fetched yet; let ./run.sh hls finish."
       : "No HLS store; run ./run.sh hls";
     if (!available && state.hls) { state.hls = false; box.checked = false; }
-    var active = available && state.hls;
+    // Cloud and Sensor also drive the ECOSTRESS + HLS mark, so they stay live
+    // while that mark is on; Mode only shapes the tile counts.
+    var active = available && (state.hls || state.coincideAll);
     el("hlsControls").classList.toggle("disabled", !active);
     el("hlsCloud").disabled = !active;
-    ["hlsMode", "hlsSensor"].forEach(function (name) {
-      Array.prototype.forEach.call(document.getElementsByName(name), function (radio) {
-        radio.disabled = !active;
-      });
+    Array.prototype.forEach.call(document.getElementsByName("hlsSensor"), function (radio) {
+      radio.disabled = !active;
+    });
+    Array.prototype.forEach.call(document.getElementsByName("hlsMode"), function (radio) {
+      radio.disabled = !(available && state.hls);
     });
     if (!state.hls && hlsLayer && map.hasLayer(hlsLayer)) { map.removeLayer(hlsLayer); }
+    if (!state.hls) { drawHlsLegend(); }
     if (state.hls) {
       if (!hlsLayer) { loadHls(); return; }
       if (!map.hasLayer(hlsLayer)) { hlsLayer.addTo(map); }
@@ -524,9 +561,21 @@
     if (!onlyOk && state.emitOnlyWindow) { state.emitOnlyWindow = false; el("emitOnlyWindow").checked = false; }
     var coincideOk = available && state.emit && state.catalog.eco_count > 0;
     el("coincide").disabled = !coincideOk;
-    el("coincideWindow").disabled = el("coincideOnly").disabled = !(coincideOk && state.coincide);
+    // The mark reads the stored ±HLS_PAIR_DAYS lists through the shared window,
+    // so it needs a window (like "Only scenes within window") and caps at the span.
+    var paired = coincideOk && state.catalog.emit_hls_paired > 0;
+    var allOk = paired && state.days > 0;
+    el("coincideAll").disabled = !allOk;
+    el("coincideAll").parentNode.title =
+      !coincideOk ? "" :
+      !paired ? "No HLS pairs on the EMIT scenes; run ./run.sh hls" :
+      state.days === 0 ? "Needs a time window" :
+      state.days > HLS_PAIR_DAYS ? "Uses ±" + HLS_PAIR_DAYS + " days of HLS acquisitions" : "";
     if (!coincideOk && state.coincide) { state.coincide = false; el("coincide").checked = false; }
-    if (!state.coincide && state.coincideOnly) { state.coincideOnly = false; el("coincideOnly").checked = false; }
+    if (!allOk && state.coincideAll) { state.coincideAll = false; el("coincideAll").checked = false; }
+    var anyMark = state.coincide || state.coincideAll;
+    el("coincideWindow").disabled = el("coincideOnly").disabled = !(coincideOk && anyMark);
+    if (!anyMark && state.coincideOnly) { state.coincideOnly = false; el("coincideOnly").checked = false; }
     if (!state.emit && emitLayer && map.hasLayer(emitLayer)) { map.removeLayer(emitLayer); }
     if (state.emit) {
       if (!emitLayer) { loadEmit(); return; }
@@ -847,6 +896,7 @@
       if (state.hls) { drawHlsLegend(); refreshHlsCounts(); }
     });
     el("coincide").addEventListener("change", function (e) { state.coincide = e.target.checked; syncEmit(); });
+    el("coincideAll").addEventListener("change", function (e) { state.coincideAll = e.target.checked; syncEmit(); syncHls(); });
     el("coincideWindow").addEventListener("input", function (e) {
       state.coincideStep = Number(e.target.value);
       el("coincideWindowOut").textContent = stepLabel(state.coincideStep);
@@ -862,6 +912,7 @@
       state.hlsCloud = Number(e.target.value);
       el("hlsCloudOut").textContent = e.target.value + "%";
       refreshHlsCounts();
+      if (state.coincideAll) { syncEmit(); }
     });
     ["hlsMode", "hlsSensor"].forEach(function (name) {
       Array.prototype.forEach.call(document.getElementsByName(name), function (radio) {
@@ -870,6 +921,7 @@
           state[name] = e.target.value;
           drawHlsLegend();
           refreshHlsCounts();
+          if (state.coincideAll) { syncEmit(); }
         });
       });
     });

@@ -30,23 +30,30 @@ case "${1:-}" in
     ;;
   footprints|emit)
     # Fetches EMIT L2A footprints and ECOSTRESS swath boxes over CONUS from
-    # NASA's CMR (no login), pairs them, then refreshes the HLS store.
+    # NASA's CMR (no login), pairs them, then refreshes the HLS store and its EMIT pairs.
     # Rerun to refresh. Network access. "emit" is kept as an alias.
     shift
     python3 -m viz.fetch_emit "$@"
     python3 -m viz.fetch_eco "$@"
     python3 -m viz.coincidence "$@"
     python3 -m viz.fetch_hls "$@"
+    python3 -m viz.hls_pairs
     ;;
   hls)
     # Fetches HLSL30 and HLSS30 v2.0 granule metadata (2022 onward) into
-    # data/hls/hls.sqlite, one CSV query per collection-month. The first run is
-    # about 635 CSV pages in 15-25 minutes, then one ring query for each of the
-    # roughly 1,200 CONUS tiles in about ten minutes; reruns skip frozen months
-    # and fetch no rings. Accepts --from YYYY-MM for a shorter first run.
-    # Network access.
+    # data/hls/hls.sqlite, one CSV query per collection-month: about 635 pages
+    # in 15-25 minutes on a first run; reruns skip frozen months. Tile outlines
+    # are computed from the tile IDs on every run (no ring queries). Then each
+    # EMIT scene is paired with its tile's acquisitions within 15 days for the
+    # coincidence marking, when EMIT footprints exist. Accepts --from YYYY-MM
+    # for a shorter first run. Network access.
     shift
-    exec python3 -m viz.fetch_hls "$@"
+    python3 -m viz.fetch_hls "$@"
+    if [ -f data/emit/footprints.geojson ]; then
+      python3 -m viz.hls_pairs
+    else
+      echo "note: no EMIT footprints yet; run ./run.sh footprints to pair them with HLS" >&2
+    fi
     ;;
   serve)
     shift

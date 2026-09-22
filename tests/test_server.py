@@ -111,6 +111,11 @@ class ServerTestCase(unittest.TestCase):
         ], "2025-08-02T00:00:00+00:00")
         hls_store.put_tile("T99ZZZ", square(cls.lon, cls.lat, 0.5))
         hls_store.put_tile("T98ZZZ", square(cls.lon + 20, cls.lat, 0.5))
+        # Attach the HLS lists to the EMIT fixture the way ./run.sh hls would.
+        from viz import hls_pairs
+        emit_doc = json.loads(paths.EMIT_FOOTPRINTS.read_text())
+        hls_pairs.pair(emit_doc["features"], hls_store, hls.TileIndex(hls_store))
+        paths.EMIT_FOOTPRINTS.write_text(json.dumps(emit_doc))
         hls_store.close()
 
         cls.server = tileserver.make_server(0)
@@ -463,6 +468,11 @@ class TestHlsRoutes(ServerTestCase):
         self.assertEqual((report["hls"]["start"], report["hls"]["end"]), ("2024-07-21", "2024-08-04"))
         self.assertEqual(report["hls"]["tiles"][0]["acq"], [])
 
+    def test_point_payload_omits_the_map_only_pairing_list(self):
+        report = json.loads(self.get(self.point_url() + self.HLS_QUERY)[2])
+        for g in report["emit"]:
+            self.assertNotIn("hls_near", g)
+
     def test_point_outside_every_tile_ring_leaves_emit_scenes_untagged(self):
         # No covering tile means nothing is known about the HLS record here, which
         # is not the same as a covering tile holding no clear acquisition.
@@ -544,7 +554,57 @@ class TestHlsBusyStore(ServerTestCase):
         self.assertEqual((catalog["hls_count"], catalog["hls_tiles"]), (4, 2))
 
 
+class TestHlsPairsOnEmit(ServerTestCase):
+    def test_catalog_counts_emit_scenes_with_hls_lists(self):
+        catalog = json.loads(self.get("/api/catalog")[2])
+        self.assertEqual(catalog["emit_hls_paired"], 1)
+
+    def test_emit_features_carry_their_hls_lists(self):
+        geo = json.loads(self.get("/api/emit/footprints.geojson")[2])
+        by_id = {f["properties"]["id"]: f["properties"] for f in geo["features"]}
+        self.assertEqual([(h["date"], h["sensor"], h["cloud"], h["dt"]) for h in by_id["near-new"]["hls_near"]],
+                         [("2025-07-21", "L30", 80, 1), ("2025-07-18", "S30", 10, -2), ("2025-07-23", "S30", 10, 3)])
+        self.assertEqual(by_id["near-old"]["hls_near"], [])
+        self.assertEqual(by_id["no-tile"]["hls_near"], [])
+
+
 class TestInterfaceAssets(ServerTestCase):
+    def test_ecostress_plus_hls_coincidence_mark(self):
+        _, _, index = self.get("/")
+        html = index.decode()
+        self.assertIn('id="coincideAll"', html)
+        self.assertIn("Mark ECOSTRESS + HLS coincidence", html)
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        from viz import hls_pairs
+        self.assertIn("HLS_PAIR_DAYS = " + str(hls_pairs.PAIR_DAYS), text)
+        self.assertIn("emit_hls_paired", text)
+        self.assertIn("purple = ECOSTRESS + HLS coincident", text)
+        sync = text[text.index("function syncEmit"):text.index("function drawLegend")]
+        self.assertIn("state.days > 0", sync)
+        self.assertIn("days of HLS acquisitions", sync)
+        style = text[text.index("function emitStyleFor"):text.index("function loadEmit")]
+        self.assertIn("hlsPaired(p)", style)
+        self.assertIn("HLS_PAIR_FILL", style)
+        if not shutil.which("node"):
+            self.skipTest("node not available")
+        match = re.search(r"function hlsPaired\(p\) \{.*?\n  \}", text, re.S)
+        self.assertIsNotNone(match, "hlsPaired function not found in app.js")
+        script = (
+            'var HLS_PAIR_DAYS = 15; var state = { days: 7, hlsCloud: 30, hlsSensor: "ALL" };\n' + match.group(0) +
+            '\nvar near = { hls_near: [{ date: "x", sensor: "S30", cloud: 10, dt: -2 }] };\n'
+            'var farOnly = { hls_near: [{ date: "x", sensor: "S30", cloud: 0, dt: 20 }] };\n'
+            'var cloudy = { hls_near: [{ date: "x", sensor: "S30", cloud: 80, dt: 1 }, { date: "x", sensor: "L30", cloud: null, dt: 1 }] };\n'
+            'var out = [hlsPaired(near), hlsPaired(farOnly), hlsPaired(cloudy), hlsPaired({})];\n'
+            'state.days = 30; out.push(hlsPaired(farOnly));\n'
+            'state.hlsSensor = "L30"; out.push(hlsPaired(near));\n'
+            'state.hlsSensor = "ALL"; state.days = 0; out.push(hlsPaired(near));\n'
+            'console.log(out.join("|"));'
+        )
+        result = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "true|false|false|false|false|false|false")
+
     def test_swipe_clips_in_layer_space_and_tracks_map_moves(self):
         # Leaflet panes are 0x0 boxes, so an inset() clip on one collapses to
         # nothing and the CPC layer vanishes. The clip must be built from

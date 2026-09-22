@@ -111,6 +111,7 @@ output { font-variant-numeric: tabular-nums; font-weight: 450; color: var(--mute
 #emitLegend span.fillsw::before {
   height: 10px; border: 1px solid #555; background: rgba(85,85,85,0.25); border-top-width: 1px;
 }
+#emitLegend span.fillsw.hls::before { border-color: #762a83; background: rgba(118,42,131,0.35); }
 .leaflet-emit-pane { cursor: default; }
 .emit-tip { font-size: 11px; }
 .readout-popup .emit-list { margin: 4px 0 0; padding: 0; list-style: none; }
