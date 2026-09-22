@@ -134,10 +134,15 @@ class TestStoreWrites(StoreTestCase):
         self.assertEqual(self.store.conn.execute(
             "SELECT count FROM months WHERE sensor='S30' AND month='2025-07'").fetchone()[0], 1)
 
-    def test_missing_tiles_and_put_tile(self):
-        self.assertEqual(self.store.missing_tiles(), ["T15TVH", "T15TWH"])
+    def test_put_tiles_writes_many_in_one_call(self):
+        self.store.put_tiles([("T15TVH", SQUARE), ("T15TWH", SQUARE)])
+        self.assertEqual([f["properties"]["tile"] for f in self.store.tiles_geojson()["features"]],
+                         ["T15TVH", "T15TWH"])
+
+    def test_distinct_tiles_and_put_tile(self):
+        self.assertEqual(self.store.distinct_tiles(), ["T15TVH", "T15TWH"])
         self.store.put_tile("T15TVH", SQUARE)
-        self.assertEqual(self.store.missing_tiles(), ["T15TWH"])
+        self.assertEqual(self.store.distinct_tiles(), ["T15TVH", "T15TWH"])
         geo = self.store.tiles_geojson()
         self.assertEqual(geo["type"], "FeatureCollection")
         self.assertEqual(geo["features"][0]["properties"], {"tile": "T15TVH"})
@@ -232,6 +237,58 @@ class TestTileIndex(StoreTestCase):
         second = hls.store_for(self.store.path)
         self.assertIsNot(second[0], first[0])
         self.assertEqual(second[1].covering(-93.5, 42.5), ["T15TVH"])
+
+
+class TestTileRing(unittest.TestCase):
+    """Reference outlines are full-tile CMR footprints and the UTM grid itself."""
+
+    def bbox(self, ring):
+        xs = [p[0] for p in ring]
+        ys = [p[1] for p in ring]
+        return (min(xs), min(ys), max(xs), max(ys))
+
+    def test_odd_zone_tile_matches_its_full_cmr_footprint(self):
+        ring = hls.tile_ring("T15TVH")            # zone 15, band T; CMR full footprint below
+        self.assertEqual(len(ring), 5)
+        self.assertEqual(ring[0], ring[-1])
+        for got, want in zip(self.bbox(ring), (-94.2292, 42.3576, -92.8796, 43.3528)):
+            self.assertAlmostEqual(got, want, delta=0.01)
+
+    def test_another_odd_zone_band_u_tile(self):
+        # CMR footprint of one T19UEQ granule: west -69.0003, south 48.6608, north 49.6527;
+        # its east edge is a swath cut (slanted, -68.01 to -67.55), so it is not a reference.
+        ring = hls.tile_ring("T19UEQ")
+        west, south, _, north = self.bbox(ring)
+        self.assertAlmostEqual(west, -69.0003, delta=0.01)
+        self.assertAlmostEqual(south, 48.6608, delta=0.01)
+        self.assertAlmostEqual(north, 49.6527, delta=0.01)
+
+    def test_even_zone_row_offset_and_nw_anchoring_in_utm(self):
+        # In an even zone the row letters are offset by five; T10TGR's square is
+        # (externally confirmed: a CMR footprint of T10TGR spans northing
+        # 4990.2-5100.0 km from easting 700.0 km, and one of T12TUT spans
+        # 5190.2-5300.0 km to easting 409.8 km, zones 10 and 12)
+        # easting 700-800 km, northing 5000-5100 km, and the 109.8 km tile hangs
+        # from the square's north-west corner: 700-809.8 km by 4990.2-5100 km.
+        ring = hls.tile_ring("T10TGR")
+        _, to_utm = hls._transforms_for(10)
+        utm = [to_utm.TransformPoint(p[0], p[1])[:2] for p in ring[:-1]]
+        self.assertAlmostEqual(utm[0][0], 700000.0, delta=1.0)
+        self.assertAlmostEqual(utm[0][1], 4990200.0, delta=1.0)
+        self.assertAlmostEqual(utm[2][0], 809800.0, delta=1.0)
+        self.assertAlmostEqual(utm[2][1], 5100000.0, delta=1.0)
+
+    def test_column_letter_outside_the_zone_set_and_row_outside_the_band_are_none(self):
+        self.assertIsNone(hls.tile_ring("T15TAH"))       # zone 15 uses columns S-Z
+        self.assertIsNone(hls.tile_ring("T10TZR"))       # zone 10 uses columns A-H
+        self.assertIsNone(hls.tile_ring("T15TVA"))       # row A lands 2,000 km north of band T
+
+    def test_malformed_or_southern_ids_are_none(self):
+        self.assertIsNone(hls.tile_ring("15TVH"))
+        self.assertIsNone(hls.tile_ring("T15TVI"))       # I is not a row letter
+        self.assertIsNone(hls.tile_ring("T61TVH"))
+        self.assertIsNone(hls.tile_ring("T23KKQ"))       # southern hemisphere band
+        self.assertIsNone(hls.tile_ring(None))
 
 
 class TestClearHelpers(unittest.TestCase):

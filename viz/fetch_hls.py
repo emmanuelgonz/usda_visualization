@@ -4,9 +4,9 @@ Run by ./run.sh hls (and as the last step of ./run.sh footprints). Each
 collection-month is one CSV query paged by the CMR-Hits header, because CMR
 caps paging depth at one million rows per query and the JSON endpoint is
 five times heavier than CSV. Months fetched well after they ended are frozen
-and skipped, so a rerun touches only recent months. Tile rings are filled
-once per tile from a JSON pattern query: about 1,200 tiles cover CONUS, so a
-first run spends roughly ten minutes on them and later runs none.
+and skipped, so a rerun touches only recent months. Tile outlines are
+computed from the tile IDs (viz.hls.tile_ring) and rewritten on every run,
+which takes a second for the roughly 1,200 tiles that cover CONUS.
 """
 
 import argparse
@@ -25,15 +25,6 @@ def csv_url(short_name, month, page_num):
     return (f"{CSV_URL}?short_name={short_name}&version={VERSION}&bounding_box={cmr.BBOX}"
             f"&temporal={start}T00:00:00Z,{end}T00:00:00Z"
             f"&page_size={cmr.PAGE_SIZE}&page_num={page_num}")
-
-
-def tile_urls(tile):
-    """One pattern query per collection, S30 first; either returns the tile's ring."""
-    return [
-        f"{cmr.CMR_URL}?short_name={SHORT_NAMES[sensor]}&version={VERSION}"
-        f"&granule_ur=HLS.{sensor}.{tile}.*&options[granule_ur][pattern]=true&page_size=1"
-        for sensor in ("S30", "L30")
-    ]
 
 
 def current_month():
@@ -71,16 +62,6 @@ def fetch_month(short_name, month, fetch_fn=cmr.fetch_response):
     return [r for r in rows if start <= r["date"] < end]
 
 
-def fetch_ring(tile, fetch_page_fn=cmr.fetch_page):
-    """The tile's closed [lon, lat] ring from the first collection that has one, or None."""
-    for url in tile_urls(tile):
-        for entry in fetch_page_fn(url):
-            ring = cmr.polygon_ring(entry)
-            if ring:
-                return ring
-    return None
-
-
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Fetch HLS granule metadata into SQLite.")
     parser.add_argument("--from", dest="first", default=hls.FIRST_MONTH,
@@ -99,15 +80,16 @@ def main(argv=None):
                 store.replace_month(sensor, month, rows, now_iso())
                 print(f"hls {sensor} {month}: {len(rows)} granules", flush=True)
 
-        missing = store.missing_tiles()
-        for i, tile in enumerate(missing, 1):
-            ring = fetch_ring(tile)
+        tiles = store.distinct_tiles()
+        outlines = []
+        for tile in tiles:
+            ring = hls.tile_ring(tile)
             if ring is None:
-                print(f"hls: no polygon for {tile}; it is counted but not drawn", file=sys.stderr)
+                print(f"hls: cannot place tile {tile}; it is counted but not drawn", file=sys.stderr)
                 continue
-            store.put_tile(tile, ring)
-            if i % 50 == 0 or i == len(missing):
-                print(f"hls tiles: {i}/{len(missing)}", flush=True)
+            outlines.append((tile, ring))
+        store.put_tiles(outlines)
+        print(f"hls tiles: {len(outlines)} outlines computed", flush=True)
 
         summary = store.summary()
         print(f"hls: {summary['count']} granules, {summary['tiles']} tiles in {paths.HLS_DB}")

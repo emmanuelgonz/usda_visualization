@@ -1,3 +1,4 @@
+import json
 import unittest
 
 from viz import cmr, fetch_hls, hls
@@ -19,17 +20,6 @@ class TestUrls(unittest.TestCase):
         self.assertIn("temporal=2025-07-01T00:00:00Z,2025-08-01T00:00:00Z", url)
         self.assertIn("page_size=2000", url)
         self.assertIn("page_num=3", url)
-
-    def test_tile_urls_try_s30_then_l30(self):
-        urls = fetch_hls.tile_urls("T15TVH")
-        self.assertEqual(len(urls), 2)
-        self.assertIn("short_name=HLSS30", urls[0])
-        self.assertIn("granule_ur=HLS.S30.T15TVH.*", urls[0])
-        self.assertIn("options[granule_ur][pattern]=true", urls[0])
-        self.assertIn("page_size=1", urls[0])
-        self.assertIn("short_name=HLSL30", urls[1])
-        self.assertIn("granule_ur=HLS.L30.T15TVH.*", urls[1])
-        self.assertTrue(urls[0].startswith(cmr.CMR_URL + "?"))
 
 
 class patch_page_size:
@@ -126,26 +116,8 @@ class TestFetchMonth(unittest.TestCase):
             fetch_hls.fetch_month("HLSS30", "2025-07", fetch_fn=fake)
 
 
-class TestFetchRing(unittest.TestCase):
-    def test_takes_the_first_polygon_from_the_first_collection_that_has_one(self):
-        asked = []
-
-        def fake(url):
-            asked.append(url)
-            if "HLSS30" in url:
-                return []
-            return [{"polygons": [["42.0 -94.0 42.0 -93.0 43.0 -93.0"]]}]
-
-        ring = fetch_hls.fetch_ring("T15TVH", fetch_page_fn=fake)
-        self.assertEqual(ring, [[-94.0, 42.0], [-93.0, 42.0], [-93.0, 43.0], [-94.0, 42.0]])
-        self.assertEqual(len(asked), 2)
-
-    def test_none_when_neither_collection_has_a_polygon(self):
-        self.assertIsNone(fetch_hls.fetch_ring("T15TVH", fetch_page_fn=lambda url: [{"polygons": []}]))
-
-
 class TestMain(unittest.TestCase):
-    def test_skips_frozen_months_and_fills_missing_rings(self):
+    def test_skips_frozen_months_and_computes_tile_outlines(self):
         import contextlib
         import io
         import shutil
@@ -171,26 +143,21 @@ class TestMain(unittest.TestCase):
                 return hls.parse_csv(csv_rows(("HLS.S30.T15TVH.2025160T170000.v2.0", "2025-06-09T17:00:00Z", 10)))
             return []
 
-        rings = []
-
-        def fake_ring(tile, fetch_page_fn=None):
-            rings.append(tile)
-            return [[-94.0, 42.0], [-93.0, 42.0], [-93.0, 43.0], [-94.0, 42.0]]
-
         with mock.patch.object(fetch_hls, "fetch_month", fake_month), \
-             mock.patch.object(fetch_hls, "fetch_ring", fake_ring), \
              mock.patch.object(fetch_hls, "current_month", lambda: "2025-06"), \
              mock.patch.object(fetch_hls.paths, "HLS_DB", db), \
              contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(fetch_hls.main(["--from", "2025-05"]), 0)
 
         self.assertEqual(sorted(fetched), [("HLSL30", "2025-06"), ("HLSS30", "2025-06")])
-        self.assertEqual(rings, ["T15TVH"])
         store = hls.Store(db, read_only=True)
         self.addCleanup(store.close)
         self.assertEqual(store.summary()["count"], 1)
         self.assertEqual(store.summary()["tiles"], 1)
-        self.assertEqual(store.missing_tiles(), [])
+        self.assertEqual(store.distinct_tiles(), ["T15TVH"])
+        ring = json.loads(store.conn.execute("SELECT ring FROM tiles WHERE tile = 'T15TVH'").fetchone()[0])
+        self.assertEqual(len(ring), 5)
+        self.assertAlmostEqual(ring[0][1], 42.3576, delta=0.01)
 
 
 if __name__ == "__main__":
