@@ -1819,3 +1819,83 @@ git commit -m "List HLS acquisitions in the readout and tag EMIT scenes"
 **Placeholder scan.** None.
 
 **Type consistency.** `hls.parse_ur` returns `(sensor, tile)` and is used that way in Tasks 3 and 4's fixtures. `Store.acquisitions` rows carry `tile, date, time, sensor, cloud` and `hls_block` reads exactly those. `store_for` returns `(Store, TileIndex)` and both server call sites index `[0]` / unpack. `state.days`, `windowBounds`, `timeWindow`, `hlsRange` are named identically in Tasks 5 and 6. `report.hls.window` is the server's echoed `window` from Task 4.
+
+## Appendix: post-review amendments
+
+The final whole-branch review returned one Critical, five Important, and seventeen Minor findings,
+with a verdict of "ready to merge with fixes". One fix wave, commits `5668cf4`..`2d927ee`, closed
+the Critical, all five Important, and four of the minors. The code blocks above are not rewritten;
+this is the record of where the committed code departs from them and why.
+
+| # | File | Change | Reason |
+| --- | --- | --- | --- |
+| T3 | `tests/test_fetch_hls.py` | `TestMain`'s `fake_month` returns its one S30 row only for `HLSS30` | The plan's fake returned the row for both collections, so the per-sensor month counts summed to 2 against the asserted 1. Ruled during execution. |
+| T3r | `viz/fetch_hls.py` | `fetch_month` raises `ValueError` naming the URL on a missing, empty, or non-integer `CMR-Hits` header | The plan's `int(headers.get("CMR-Hits") or 0)` turned a missing header into one page and recorded the month as complete. Task review. |
+| C1 | `viz/hls.py`, `viz/tileserver.py`, `viz/web/app.js` | Read-only connect has `timeout=0.5`; `hls.BUSY` aliases `sqlite3.OperationalError`; one `hls_read` helper degrades a locked store: catalog reports `hls_busy` true with zero fields, the two HLS routes return 503, `/api/point` returns `hls: null`; the catalog boot fetch has a `.catch` that writes a note into the panel; `syncHls` disables the checkbox while busy | The spec's §3.1 claim that the rollback journal lets readers proceed during a month replacement is wrong: the writer's EXCLUSIVE lock outlasts the 5 s default reader timeout, the catalog route 500ed, and the unguarded boot fetch left a blank page for the whole fetch. WAL was ruled out on the DrvFs mount; a `.part` rename would lose resumability. |
+| I2 | `viz/tileserver.py`, `viz/web/app.js` | Layer gated on `hls_tiles > 0` as well as `hls_count > 0`, with its own note; `hls_block` leaves the per-scene `hls` key absent when no ring covers the point and sets `null` only when a covering tile has no clear acquisition; the readout prints "no clear HLS" only for `null` | A store with rows but no rings (the state for the first twenty minutes of a fetch) drew an empty layer and tagged every EMIT scene "no clear HLS". |
+| I3/I4 | `viz/hls.py` `SCHEMA`, `tests/test_hls.py` | Covering indexes `acq(date, cloud, tile)` and `acq(tile, date, cloud, sensor, time)`; `acq_tile_date` dropped; `acq_date` kept for the month delete; the index set is pinned by the schema test | Season-length counts measured 1.13 s and the EMIT-tag query 0.8 s on 683k rows against the spec's "well under a second"; both were index traversals with per-row table lookups. The next `./run.sh hls` builds the indexes on an existing store. |
+| I5 | `viz/tileserver.py`, `viz/web/app.js` | `start`/`end` are `null` when neither a range nor a week is given; the listing query is skipped, EMIT tags are still computed; the heading reads "no week selected" | The `"0000-00-00"` sentinel reached the popup heading. |
+| I6 | `viz/fetch_hls.py` | `fetch_month` compares the parsed row total (before the month filter) against `CMR-Hits` and raises on a shortfall | A truncated page with HTTP 200 would have been recorded as a complete month and then frozen. |
+| M | `viz/hls.py`, tests, `run.sh`, `viz/fetch_hls.py` | `store_for` closes a cached entry before returning `None` on a missing file; `TestMain` and `TestFetchAll` redirect stdout; `footprints` forwards its arguments to the HLS step; tile-count notes say about 1,200 tiles and roughly ten minutes | Minors 12, 17, 19, 23 of the final review. |
+
+Thirteen minors ship as reviewed and are recorded here for a later pass: the three truncated lists
+in `showReadout` duplicate their rendering; `viz/hls.py` carries six concerns in 260 lines; the two
+CMR retry loops are duplicated; `fetch_response` retries `OSError` only, not `IncompleteRead`; the
+routes accept a reversed or calendar-invalid date range and a lone `start` on `/api/point` with an
+empty result rather than a 400; the month string is split inline in two helpers; the schema test
+now pins indexes but `is_frozen` still takes the calendar date of an offset-aware timestamp; the
+tiles route re-serialises the rings on every request; season mode refetches counts on a window
+move; a null range leaves the previous tile colours on screen; HLS cloud values print raw where
+EMIT rounds; and the HLS tags reuse the `eco-tag` class.
+
+Three items from the fix wave's re-review are parked: `hls_read` catches every
+`sqlite3.OperationalError`, not only the lock, so a malformed query would read as "busy" rather
+than a 500 (no query is built dynamically today); `store_for` can leave a just-opened read-only
+connection to the reference counter when the tile-index build hits the lock; and the
+`acq(date, cloud, tile)` index covers `counts` fully only for the Both sensor setting.
+
+The spec needs three corrections that only the author can make: §3.1's rollback-journal claim
+(readers are blocked during a month replacement, hence the degradation above), §3.1's index table
+and §3.3's timing claim (superseded by the covering indexes), and the "about 900 tiles" estimate in
+§2, §3.2, and §3.3 (the live store holds about 1,200 distinct CONUS tiles).
+
+Measured on the real data (2026-09-21): 1,268,713 granules (HLSL30 549,095, HLSS30 719,618) over
+1,223 CONUS tiles, every tile with a ring; the first fetch took 72 minutes including the ring pass,
+the index-building rerun 5 minutes; the store is 352 MB with the covering indexes (the spec's
+120 MB estimate predates them). Two-week counts take 4 ms and season counts 310 ms for both
+sensors, but a sensor-filtered season count takes 1.2–1.3 s because neither covering index leads
+with `sensor`; the EMIT-tag query at Ames fell from 0.8 s to 3 ms. Through the server: tiles
+302 KB in 0.10 s, two-week counts 0.31 s, season counts 0.42 s, a point click 0.91 s (the EMIT and
+ECOSTRESS baseline).
+
+## Appendix: additions on the same branch after the final review
+
+Two further changes landed on `hls-coverage` before the pull request, both approved in chat
+rather than through a spec.
+
+**Computed MGRS tile outlines.** Pairing the EMIT scenes exposed that 633 of the 1,223 stored
+rings were swath-clipped data footprints, not tile outlines, because §3.2 took each ring from the
+first granule CMR returned. `viz/hls.py` now computes the outline from the tile ID (`tile_ring`):
+UTM zone, latitude band, the 100 km square from its column letter (three letter sets by zone
+mod 3) and row letter (offset five rows in even zones, resolved to the band's minimum northing
+with a 100 km tolerance), then the 109.8 km Sentinel-2 tile hung from the square's north-west
+corner, transformed to WGS84 with the GDAL bindings already in the stack. `viz/fetch_hls.py`
+rewrites every outline on each run and no longer queries CMR for rings; `Store.missing_tiles`
+became `distinct_tiles`. Validation against the real store before the change: all 1,223 stored
+footprints lay inside their computed box and the 542 full-tile footprints matched it within 50 m.
+After the change every outline is a full tile (at least 1.08° by 0.99°) and the EMIT centroids
+covered rose from 19,017 to 27,725; the 1,157 uncovered scenes sit outside CONUS's tiles.
+
+**ECOSTRESS + HLS coincidence mark.** `viz/hls_pairs.py`, run after the fetch by `./run.sh hls`
+and `./run.sh footprints`, writes an `hls_near` list onto every EMIT feature: the acquisitions of
+every tile containing the scene centroid (two or four in the 9.8 km overlap strips, which hold
+7,590 centroids) within ±15 days, one entry per date and sensor keeping the clearer granule,
+nearest first, capped at 12, each `{date, sensor, cloud, dt}`; the catalog
+reports `emit_hls_paired`. A second checkbox, "Mark ECOSTRESS + HLS coincidence", marks a scene
+that is ECOSTRESS-coincident by the existing rule and has a stored acquisition within the shared
+Time window (clamped to 15 days) that passes the HLS Max cloud and Sensor controls; such scenes
+fill in HLS purple at 0.35 while ECOSTRESS-only scenes keep the year-colour fill, "Only coincident
+scenes" keeps any marked scene, the mark is disabled at a zero window and notes its ±15-day cap
+above it, and the HLS Cloud and Sensor controls stay enabled while the mark is on. The
+per-click `hls` tag on `/api/point` is a separate field and unchanged. Pairing the real data takes
+41 s and grows the EMIT file from 35 MB to 50 MB.
