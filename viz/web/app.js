@@ -140,6 +140,7 @@
   var cdlLayer = null;
   var cpcLayer = null;
   var readoutPopup = null;
+  var readoutOpen = {};      // which collapsible readout sections the user left open
   var swipeHandle = null;
   var swipeFraction = 0.5;
 
@@ -666,6 +667,32 @@
     return value === null || value === undefined ? "—" : (value * 100).toFixed(1) + "%";
   }
 
+  // A collapsible readout section: the heading with its count stays visible,
+  // the list opens on click. A heading with nothing to list is a plain line.
+  function foldable(key, heading, body) {
+    if (!body) { return '<p class="section">' + heading + "</p>"; }
+    return '<details class="fold" data-fold="' + key + '"' + (readoutOpen[key] ? " open" : "") + ">" +
+           '<summary class="section">' + heading + "</summary>" + body + "</details>";
+  }
+
+  // Wire the toggles inside an open popup: remember the choice and re-measure
+  // the box so an expanded list gets the height cap and stays on screen.
+  // popup.update() would re-render the content from its HTML string, which
+  // rebuilds the section closed, so the layout, position, and pan steps of
+  // Leaflet 1.9.4's update() are called directly instead.
+  function wireFolds(popup) {
+    var node = popup.getElement();
+    if (!node) { return; }
+    Array.prototype.forEach.call(node.querySelectorAll("details.fold"), function (details) {
+      details.addEventListener("toggle", function () {
+        readoutOpen[details.dataset.fold] = details.open;
+        popup._updateLayout();
+        popup._updatePosition();
+        popup._adjustPan();
+      });
+    });
+  }
+
   function showReadout(report) {
     var cover = report.cover || {};
     var noCover = (cover.primary === null || cover.primary === undefined) &&
@@ -698,7 +725,7 @@
     }
 
     var granules = report.emit || [];
-    html += '<p class="section">EMIT scenes covering this point: ' + granules.length + "</p>";
+    var emitBody = "";
     if (granules.length) {
       var centre = report.week_sunday ? Date.parse(report.week_sunday + "T00:00:00Z") : null;
       var bounds = windowBounds();
@@ -707,7 +734,7 @@
         return Math.abs(Date.parse(a.start) - centre) - Math.abs(Date.parse(b.start) - centre);
       });
       var shown = sorted.slice(0, 15);
-      html += '<ul class="emit-list">' + shown.map(function (g) {
+      emitBody += '<ul class="emit-list">' + shown.map(function (g) {
         var t = Date.parse(g.start);
         var inWin = bounds && t >= bounds[0] && t <= bounds[1];
         return "<li" + (inWin ? ' class="in"' : "") + '><span class="when">' + g.start.slice(0, 10) + "</span>" +
@@ -723,11 +750,12 @@
                (inWin ? " <span>★</span>" : "") + "</li>";
       }).join("") + "</ul>";
       if (granules.length > shown.length) {
-        html += '<p class="note">and ' + (granules.length - shown.length) + " more</p>";
+        emitBody += '<p class="note">and ' + (granules.length - shown.length) + " more</p>";
       }
     }
+    html += foldable("emit", "EMIT scenes covering this point: " + granules.length, emitBody);
     var swaths = report.eco || [];
-    html += '<p class="section">ECOSTRESS swaths covering this point: ' + swaths.length + "</p>";
+    var ecoBody = "";
     if (swaths.length) {
       var centreE = report.week_sunday ? Date.parse(report.week_sunday + "T00:00:00Z") : null;
       var sortedE = swaths.slice().sort(function (a, b) {
@@ -735,28 +763,27 @@
         return Math.abs(Date.parse(a.start) - centreE) - Math.abs(Date.parse(b.start) - centreE);
       });
       var shownE = sortedE.slice(0, 10);
-      html += '<ul class="emit-list">' + shownE.map(function (s) {
+      ecoBody += '<ul class="emit-list">' + shownE.map(function (s) {
         return '<li><span class="when">' + s.start.slice(0, 10) + " " + s.start.slice(11, 16) + "</span>" +
                "<span>" + (s.daynight || "?").toLowerCase() + "</span></li>";
       }).join("") + "</ul>";
       if (swaths.length > shownE.length) {
-        html += '<p class="note">and ' + (swaths.length - shownE.length) + " more</p>";
+        ecoBody += '<p class="note">and ' + (swaths.length - shownE.length) + " more</p>";
       }
     }
+    html += foldable("eco", "ECOSTRESS swaths covering this point: " + swaths.length, ecoBody);
     var hlsBlock = report.hls;
     if (hlsBlock) {
       var totalAcq = 0, totalClear = 0;
       hlsBlock.tiles.forEach(function (t) { totalAcq += t.acq.length; totalClear += t.clear; });
-      html += '<p class="section">HLS acquisitions, ' +
-              (hlsBlock.start ? hlsBlock.start + " to " + hlsBlock.end : "no week selected") +
-              ": " + totalClear + " clear of " + totalAcq + "</p>";
+      var hlsBody = "";
       if (!hlsBlock.tiles.length) {
-        html += '<p class="note">No MGRS tile ring covers this point.</p>';
+        hlsBody += '<p class="note">No MGRS tile ring covers this point.</p>';
       }
       hlsBlock.tiles.forEach(function (t) {
-        html += '<p class="note">' + t.tile + ": " + t.clear + " clear of " + t.acq.length + "</p>";
+        hlsBody += '<p class="note">' + t.tile + ": " + t.clear + " clear of " + t.acq.length + "</p>";
         var shownH = t.acq.slice(0, 20);
-        html += '<ul class="emit-list">' + shownH.map(function (a) {
+        hlsBody += '<ul class="emit-list">' + shownH.map(function (a) {
           var clear = a.cloud !== null && a.cloud <= hlsBlock.cloud &&
                       (hlsBlock.sensor === "ALL" || a.sensor === hlsBlock.sensor);
           return "<li" + (clear ? ' class="in"' : "") + '><span class="when">' + a.date + "</span>" +
@@ -765,9 +792,12 @@
                  (clear ? " <span>✓</span>" : "") + "</li>";
         }).join("") + "</ul>";
         if (t.acq.length > shownH.length) {
-          html += '<p class="note">and ' + (t.acq.length - shownH.length) + " more</p>";
+          hlsBody += '<p class="note">and ' + (t.acq.length - shownH.length) + " more</p>";
         }
       });
+      html += foldable("hls", "HLS acquisitions, " +
+                       (hlsBlock.start ? hlsBlock.start + " to " + hlsBlock.end : "no week selected") +
+                       ": " + totalClear + " clear of " + totalAcq, hlsBody);
     }
     return html;
   }
@@ -932,7 +962,10 @@
     });
 
     map.on("click", function (e) {
-      readoutPopup = L.popup({ maxWidth: 320, className: "readout-popup" })
+      // Cap the box at 60% of the map so long lists scroll inside it (Leaflet
+      // adds leaflet-popup-scrolled) instead of running off the map.
+      readoutPopup = L.popup({ maxWidth: 320, maxHeight: Math.round(map.getSize().y * 0.6),
+                               className: "readout-popup" })
         .setLatLng(e.latlng)
         .setContent('<p class="note">Reading…</p>')
         .openOn(map);
@@ -945,7 +978,9 @@
                 "&cloud=" + state.hlsCloud + "&sensor=" + state.hlsSensor + "&window=" + state.days;
       var popup = readoutPopup;
       fetch(url).then(function (r) { return r.json(); })
-        .then(function (report) { if (popup.isOpen()) { popup.setContent(showReadout(report)); } })
+        .then(function (report) {
+          if (popup.isOpen()) { popup.setContent(showReadout(report)); wireFolds(popup); }
+        })
         .catch(function () { if (popup.isOpen()) { popup.setContent('<p class="note">Read failed.</p>'); } });
     });
 

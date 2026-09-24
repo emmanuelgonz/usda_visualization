@@ -876,6 +876,26 @@ class TestInterfaceAssets(ServerTestCase):
         self.assertIn("g.hls === null", text)
         self.assertIn("no week selected", text)
 
+    def test_readout_lists_are_collapsible_and_remembered(self):
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        self.assertIn("function foldable(key, heading, body)", text)
+        self.assertIn('<details class="fold" data-fold=', text)
+        self.assertIn('<summary class="section">', text)
+        for key in ('foldable("emit"', 'foldable("eco"', 'foldable("hls"'):
+            self.assertIn(key, text)
+        self.assertIn('addEventListener("toggle"', text)
+        # A re-render on toggle would rebuild the section closed; only the layout is redone.
+        wiring = text[text.index("function wireFolds"):text.index("function showReadout")]
+        self.assertNotIn("popup.update()", wiring)
+        for step in ("popup._updateLayout()", "popup._updatePosition()", "popup._adjustPan()"):
+            self.assertIn(step, wiring)
+        self.assertIn("readoutOpen[details.dataset.fold] = details.open", text)
+        self.assertIn("maxHeight: Math.round(map.getSize().y * 0.6)", text)
+        _, _, css = self.get("/static/style.css")
+        self.assertIn("details.fold[open]", css.decode())
+        self.assertIn("leaflet-popup-scrolled", css.decode())
+
     def test_readout_lists_hls_acquisitions_and_tags_emit_scenes(self):
         _, _, app = self.get("/static/app.js")
         text = app.decode()

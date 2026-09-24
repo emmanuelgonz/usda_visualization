@@ -66,6 +66,14 @@ output { font-variant-numeric: tabular-nums; font-weight: 450; color: var(--mute
 .readout-popup h2 { margin: 0; font-size: 14px; font-weight: 650; }
 .readout-popup .scale { margin: 1px 0 9px; color: var(--muted); font-size: 11px; }
 .readout-popup .section { margin: 0 0 2px; font-weight: 550; }
+.readout-popup .leaflet-popup-scrolled { border: 0; padding-right: 6px; scrollbar-width: thin; }
+.readout-popup details.fold { margin: 6px 0 0; }
+.readout-popup summary.section { cursor: pointer; list-style: none; }
+.readout-popup summary.section::-webkit-details-marker { display: none; }
+.readout-popup summary.section::before {
+  content: "▸"; display: inline-block; width: 12px; color: var(--muted); transition: transform 0.12s;
+}
+.readout-popup details.fold[open] > summary.section::before { transform: rotate(90deg); }
 .readout-popup table { width: 100%; border-collapse: collapse; }
 .readout-popup th { text-align: left; font-weight: 450; padding: 1px 0; }
 .readout-popup td { text-align: right; font-variant-numeric: tabular-nums; padding: 1px 0; }
