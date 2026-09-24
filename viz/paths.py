@@ -21,5 +21,6 @@ HLS_DB = HLS_DATA / "hls.sqlite"
 
 CACHE = ROOT / "cache"
 TILE_CACHE = CACHE / "tiles"
+SCENE_CACHE = CACHE / "emit"
 
 WEB = ROOT / "viz" / "web"
