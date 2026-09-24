@@ -84,25 +84,34 @@ _sources_guard = threading.Lock()
 
 
 def gcp_source(scene_id, corners):
-    """Name of an in-memory VRT placing the browse PNG by its four corners, built once per process."""
+    """Name of an in-memory VRT placing the browse PNG by its four corners, built once per process.
+
+    Built under the scene's own download lock so concurrent first requests for
+    one scene don't race to write (or read mid-write) the same /vsimem name.
+    """
     with _sources_guard:
         name = _sources.get(scene_id)
     if name is not None:
         return name
-    png = str(browse_path(scene_id))
-    src = gdal.Open(png)
-    width, height = src.RasterXSize, src.RasterYSize
-    bands = [1, 2, 3] if src.RasterCount >= 3 else [1, 1, 1]
-    pixels = [(0, 0), (width, 0), (width, height), (0, height)]
-    gcps = [gdal.GCP(float(lon), float(lat), 0.0, float(px), float(py))
-            for (lon, lat), (px, py) in zip(corners, pixels)]
-    srs = osr.SpatialReference()
-    srs.ImportFromEPSG(4326)
-    srs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
-    name = f"/vsimem/scene_{scene_id}.vrt"
-    gdal.Translate(name, src, format="VRT", bandList=bands, GCPs=gcps, outputSRS=srs.ExportToWkt())
-    with _sources_guard:
-        _sources[scene_id] = name
+    with _lock_for(scene_id):
+        with _sources_guard:
+            name = _sources.get(scene_id)
+        if name is not None:
+            return name
+        png = str(browse_path(scene_id))
+        src = gdal.Open(png)
+        width, height = src.RasterXSize, src.RasterYSize
+        bands = [1, 2, 3] if src.RasterCount >= 3 else [1, 1, 1]
+        pixels = [(0, 0), (width, 0), (width, height), (0, height)]
+        gcps = [gdal.GCP(float(lon), float(lat), 0.0, float(px), float(py))
+                for (lon, lat), (px, py) in zip(corners, pixels)]
+        srs = osr.SpatialReference()
+        srs.ImportFromEPSG(4326)
+        srs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+        name = f"/vsimem/scene_{scene_id}.vrt"
+        gdal.Translate(name, src, format="VRT", bandList=bands, GCPs=gcps, outputSRS=srs.ExportToWkt())
+        with _sources_guard:
+            _sources[scene_id] = name
     return name
 
 

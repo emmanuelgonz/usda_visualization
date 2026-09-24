@@ -1,8 +1,10 @@
 import math
 import shutil
 import tempfile
+import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 from osgeo import gdal
@@ -154,6 +156,31 @@ class TestRenderTile(SceneTestCase):
         self.assertAlmostEqual(east, 0.0, places=6)
         self.assertAlmostEqual(south, 0.0, places=6)
         self.assertAlmostEqual(north, 85.0511, places=3)
+
+    def test_concurrent_gcp_source_builds_once(self):
+        real_translate = scene.gdal.Translate
+        calls = []
+
+        def counting_translate(*args, **kwargs):
+            calls.append(1)
+            return real_translate(*args, **kwargs)
+
+        names = [None] * 8
+        barrier = threading.Barrier(8)
+
+        def worker(index):
+            barrier.wait()
+            names[index] = scene.gcp_source("S1", CORNERS)
+
+        with patch.object(scene.gdal, "Translate", side_effect=counting_translate):
+            threads = [threading.Thread(target=worker, args=(i,)) for i in range(8)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+
+        self.assertTrue(all(name == names[0] for name in names))
+        self.assertEqual(len(calls), 1)
 
 
 if __name__ == "__main__":
