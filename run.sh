@@ -36,6 +36,18 @@ case "${1:-}" in
       viz/web/vendor/basins2.geojson viz/web/vendor/basins4.geojson
     rm -rf "$tmp"
     ls -la viz/web/vendor/basins2.geojson viz/web/vendor/basins4.geojson
+    # Rivers: HydroRIVERS v1.0 North America (66 MB) in two Strahler-order bands, and the
+    # Natural Earth 10 m named rivers with the North America supplement.
+    tmp=$(mktemp -d)
+    curl -fsSL -o "$tmp/hydrorivers.zip" https://data.hydrosheds.org/file/HydroRIVERS/HydroRIVERS_v10_na_shp.zip
+    curl -fsSL -o "$tmp/ne_rivers.zip" https://naciscdn.org/naturalearth/10m/physical/ne_10m_rivers_lake_centerlines.zip
+    curl -fsSL -o "$tmp/ne_rivers_na.zip" https://naciscdn.org/naturalearth/10m/physical/ne_10m_rivers_north_america.zip
+    python3 -m viz.vendor_rivers "/vsizip/$tmp/hydrorivers.zip/HydroRIVERS_v10_na_shp/HydroRIVERS_v10_na.shp" \
+      "/vsizip/$tmp/ne_rivers.zip/ne_10m_rivers_lake_centerlines.shp" \
+      "/vsizip/$tmp/ne_rivers_na.zip/ne_10m_rivers_north_america.shp" \
+      viz/web/vendor/rivers6.geojson viz/web/vendor/rivers4.geojson viz/web/vendor/rivers_named.geojson
+    rm -rf "$tmp"
+    ls -la viz/web/vendor/rivers6.geojson viz/web/vendor/rivers4.geojson viz/web/vendor/rivers_named.geojson
     ;;
   footprints|emit)
     # Fetches EMIT L2A footprints and ECOSTRESS swath boxes over CONUS from
@@ -78,6 +90,9 @@ case "${1:-}" in
     fi
     if [ ! -f viz/web/vendor/basins2.geojson ] || [ ! -f viz/web/vendor/basins4.geojson ]; then
       echo "note: basin outlines missing (viz/web/vendor/basins2.geojson, basins4.geojson); the basin layers are off until ./run.sh vendor is run" >&2
+    fi
+    if [ ! -f viz/web/vendor/rivers6.geojson ] || [ ! -f viz/web/vendor/rivers4.geojson ] || [ ! -f viz/web/vendor/rivers_named.geojson ]; then
+      echo "note: river lines missing (viz/web/vendor/rivers6.geojson, rivers4.geojson, rivers_named.geojson); the river layers are off until ./run.sh vendor is run" >&2
     fi
     if [ ! -f data/hls/hls.sqlite ]; then
       echo "note: no HLS store (data/hls/hls.sqlite); the HLS layer is off until ./run.sh hls is run" >&2
