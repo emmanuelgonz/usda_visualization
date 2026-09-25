@@ -978,3 +978,51 @@ git commit -m "Show an EMIT scene's browse image on the map from the readout"
 **Type consistency.** `scene_corners(index, scene_id)` returns a list of four `[lon, lat]` and Task 2's `render_tile(scene_id, corners, z, x, y)` consumes it as such; `ensure_browse(scene_id, url, fetch=)` is called with `(scene_id, props.get("browse"))` in Task 3 and patched with the same signature in its tests; `scene_bbox` returns a tuple that Task 3 lists into `bbox` and Task 4 reads as `[minlon, minlat, maxlon, maxlat]`.
 
 **Review Focus.** Items 1, 2 → Task 3 tests (`test_path_characters_in_the_id_never_reach_the_handler`, `test_failed_download_is_502` covers the 502 path; the null-`browse` case is covered by `test_refuses_other_hosts_and_missing_urls_before_fetching` in Task 2 raising `BrowseError`, which Task 3 maps to 502). Item 3 → Task 2 `test_stale_part_file_is_not_trusted`. Item 4 → Task 2 `test_far_tile_is_the_shared_transparent_tile_and_is_cached`. Item 5 → Task 4 static assert that `showScene` calls `clearScene()` first.
+
+## Appendix: post-review amendments
+
+The final whole-plan review verified the corner rule on every real scene (both neighbours give the
+same order for all 23,016 scenes that have both; the flight vector lies within 15° of a ring edge,
+so the top and bottom pairs never tie) and the warp end to end against the state shoreline under 49
+concurrent tile requests. It returned no Critical, two Important, and eight Minor findings. One fix
+wave, commits `fe5514c`..`8b1f911`, closed the first Important and four minors; the second
+Important is a scope decision recorded below. The code blocks above are not rewritten; this is the
+record of where the committed code departs from them and why.
+
+| # | File | Change | Reason |
+| --- | --- | --- | --- |
+| T2r | `viz/scene.py` | `gcp_source` builds the virtual raster under the scene's lock with a re-check | The plan's code checked the cache, released the guard, and built the shared `/vsimem` name unlocked, so concurrent first tiles could build it twice. Task review. |
+| T3 | `tests/test_server.py` | Fixture browse URLs are on the LP DAAC host and carry the scene ID | The plan's tile tests need the host check to pass; Step 1 omitted it. |
+| I1 | `viz/scene.py` | `download` catches `http.client.HTTPException`; `ensure_browse` opens the `.part` file with GDAL and checks its size before the rename, unlinking it and raising `BrowseError` otherwise | A login page or a truncated body was cached for good and the scene returned 500 on every tile. |
+| M3 | `viz/scene.py` | The virtual raster sits over a one-time GeoTIFF copy of the browse image in `/vsimem` | Each tile re-decoded the whole PNG: 1.06 s at zoom 6, 0.34 s at 10; now 0.006–0.039 s. |
+| M4 | `viz/tileserver.py`, `viz/web/app.js` | Off-scene tiles are answered before the download; the tile layer carries `bounds` | Off-scene tiles waited for the download and held the browser's connections. |
+| M5 | `tests/test_scene.py` | A green top-right pixel must land at the top-right vertex; check points choose their own tile | The red-corner test alone would pass a transposed mapping. |
+| M9 | `viz/scene.py` | Module docstring records cache growth | About 2.7 MB per browse image and tens of MB of tiles per explored scene, never pruned. |
+
+Deferred without fix: `render_tile` duplicates `tileserver._cached`; `ensure_browse` binds its
+`fetch` default at definition time, so tests patch it at module level; a failed scene shows no
+tiles and no message; the coincidence fill tints a shown scene (a consequence of the pane order);
+the `OAMS_TRADITIONAL_GIS_ORDER` call is inert after the WKT round-trip; `_touches` uses raw
+longitudes (no antimeridian case over CONUS); the per-scene lock and raster dictionaries grow for
+the process life; the interface test asserts source text only, since the node runtime has no
+Leaflet map; the GeoTIFF copy behind each viewed scene stays in memory for the process life (about
+5 MB per scene), the intended trade for the faster tiles.
+
+**Named limitation (user's decision, 2026-09-25).** EMIT collection 002 IDs
+(`EMIT_L2A_RFL_002_20260919T194846`) carry no orbit or scene-number fields, so the orientation rule
+returns `None` for them and they get no "show" action; four such scenes exist in the footprint
+file today. Consecutive 002 scenes chain by time (each ends 12 s before the next starts), which
+could give a neighbour rule for both versions, but the 002 corner convention has not been checked.
+Revisit when enough 002 scenes exist to verify it. The spec's §2 and §5 need this, and its
+"about 1.4 MB" browse size should read "2.6–2.8 MB".
+
+**Removed (2026-09-25).** Offsets reported in the browser were measured on served tiles at zoom
+13: Shelbyville, Illinois and its lake sat about 2.4 km west and 1.5 km south of the CDL in scene
+`…_2520912_021`, with 2–6 km errors on other scenes, varying by scene. The browse PNG carries no
+coordinates and the four-vertex polygon is only a summary of the swath, so no single correction
+holds (a constant along-track extent was tried and reverted). The user decided the image must not
+be placed on the map without real coordinates. Commit `0089a06` removed the overlay (the scene tile
+route, `viz/scene.py`, the orientation helpers, the pane and control, and their tests); the browse
+image now opens in an in-page viewer over the map with the scene's date, ID, cloud cover, and
+links. A georeferenced overlay remains possible with the per-pixel geolocation in the protected
+L2A file.

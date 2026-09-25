@@ -1,7 +1,10 @@
 # EMIT Scene Overlay — Design
 
 **Date:** 2026-09-24
-**Status:** Approved design, pending implementation plan
+**Status:** Superseded on 2026-09-25. The overlay was built, measured, and removed: the browse
+image carries no coordinates, and the four-vertex CMR polygon places it only to within 2–6 km,
+varying by scene (see §2). The browse image is now shown in an in-page viewer instead. A
+georeferenced overlay would need the per-pixel geolocation from the protected L2A file.
 **Extends:** `2026-09-21-emit-footprints-design.md`
 
 ## 1. Purpose
@@ -33,6 +36,17 @@ the browse link only.
 
 The footprint quad is a parallelogram to within a few tens of metres, so a first-order polynomial
 warp from four ground control points places the image without residuals.
+
+**Placement accuracy (2026-09-25).** The published polygon places the browse image to within a few
+kilometres, not to field scale. Served scene tiles compared with served CDL tiles at zoom 13 show
+the town and lake at Shelbyville, Illinois, about 2.4 km west and 1.5 km south of their CDL
+positions in scene `…_2520912_021`, and offsets of 2–6 km were seen on other scenes; the error
+varies by scene and is neither a fixed translation nor a scale, and a trial that replaced the
+polygon's along-track extent with a constant made it worse and was reverted. The polygon is a
+four-vertex CMR summary of a swath whose true per-pixel geolocation is only in the protected L2A
+file (`location/lon`, `location/lat`), which needs an Earthdata login. Field-scale accuracy
+therefore needs that geolocation as a dense set of ground control points; until then the overlay
+is approximate and is labelled so.
 
 ## 3. Architecture
 
