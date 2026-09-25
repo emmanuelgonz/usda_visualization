@@ -18,12 +18,13 @@ CORNERS = [[-100.0, 40.0], [-99.0, 40.0], [-99.0, 39.0], [-100.0, 39.0]]
 
 
 def write_png(path, bands=3):
-    """A 4x4 image, mid-grey everywhere except a pure red top-left pixel."""
+    """A 4x4 image, mid-grey except a pure red top-left pixel and a pure green top-right pixel."""
     ds = gdal.GetDriverByName("MEM").Create("", 4, 4, bands, gdal.GDT_Byte)
     for index in range(bands):
         data = np.full((4, 4), 128, dtype=np.uint8)
         if bands >= 3:
             data[0, 0] = 255 if index == 0 else 0
+            data[0, 3] = 255 if index == 1 else 0
         else:
             data[0, 0] = 255
         ds.GetRasterBand(index + 1).WriteArray(data)
@@ -137,19 +138,31 @@ class TestRenderTile(SceneTestCase):
 
     def test_corner_pixel_lands_at_its_vertex_and_outside_is_transparent(self):
         z = 8
-        x, y = gridmath.lonlat_to_tile(-99.9, 39.9, z)
+
+        x, y = gridmath.lonlat_to_tile(-99.9, 39.9, z)     # inside the top-left source pixel
         rgba = decode(scene.render_tile("S1", CORNERS, z, x, y))
         self.assertEqual(rgba.shape[0], 4)
-        col, row = pixel_of(-99.9, 39.9, z, x, y)          # inside the top-left source pixel
+        col, row = pixel_of(-99.9, 39.9, z, x, y)
         self.assertGreater(rgba[0, row, col], 200)
         self.assertLess(rgba[1, row, col], 60)
         self.assertEqual(rgba[3, row, col], 255)
-        col, row = pixel_of(-99.1, 39.1, z, x, y)          # bottom-right source pixel: grey
-        if 0 <= col < 256 and 0 <= row < 256:
-            self.assertTrue(100 <= rgba[0, row, col] <= 160)
-        col, row = pixel_of(-100.4, 40.4, z, x, y)         # outside the quad
-        if 0 <= col < 256 and 0 <= row < 256:
-            self.assertEqual(rgba[3, row, col], 0)
+
+        x, y = gridmath.lonlat_to_tile(-99.1, 39.9, z)     # inside the top-right source pixel: corners[1]
+        rgba = decode(scene.render_tile("S1", CORNERS, z, x, y))
+        col, row = pixel_of(-99.1, 39.9, z, x, y)
+        self.assertLess(rgba[0, row, col], 60)
+        self.assertGreater(rgba[1, row, col], 200)
+        self.assertEqual(rgba[3, row, col], 255)
+
+        x, y = gridmath.lonlat_to_tile(-99.1, 39.1, z)     # bottom-right source pixel: grey
+        rgba = decode(scene.render_tile("S1", CORNERS, z, x, y))
+        col, row = pixel_of(-99.1, 39.1, z, x, y)
+        self.assertTrue(100 <= rgba[0, row, col] <= 160)
+
+        x, y = gridmath.lonlat_to_tile(-100.4, 40.4, z)    # outside the quad
+        rgba = decode(scene.render_tile("S1", CORNERS, z, x, y))
+        col, row = pixel_of(-100.4, 40.4, z, x, y)
+        self.assertEqual(rgba[3, row, col], 0)
 
     def test_single_band_source_renders_grey(self):
         z = 8
