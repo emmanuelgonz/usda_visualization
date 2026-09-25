@@ -642,6 +642,25 @@ class TestSceneTiles(ServerTestCase):
         self.assertEqual(ctx.exception.code, 502)
         self.assertIn("browse image unavailable", ctx.exception.read().decode())
 
+    def test_invalid_browse_image_is_502_and_not_cached(self):
+        from viz import scene as scene_module
+
+        def junk(url, dest):
+            self.calls.append(url)
+            Path(dest).write_bytes(b"<html>Earthdata Login</html>")
+
+        scene_module.ensure_browse = lambda sid, url, fetch=junk: self._real_ensure(sid, url, fetch=fetch)
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.get(self.tile_url(self.SCENE))
+        self.assertEqual(ctx.exception.code, 502)
+        self.assertIn("browse image unavailable", ctx.exception.read().decode())
+        self.assertEqual(len(self.calls), 1)
+        # Nothing was cached, so a second request retries the fetch rather than failing forever.
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.get(self.tile_url(self.SCENE))
+        self.assertEqual(ctx.exception.code, 502)
+        self.assertEqual(len(self.calls), 2)
+
     def test_point_entries_carry_orientable_and_bbox(self):
         report = json.loads(self.get(self.point_url())[2])
         by_id = {g["id"]: g for g in report["emit"]}

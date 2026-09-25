@@ -7,6 +7,7 @@ the same disk tile cache as the CDL and CPC layers. The download is the
 project's only on-demand network access and is confined to the LP DAAC host.
 """
 
+import http.client
 import math
 import os
 import threading
@@ -38,7 +39,7 @@ def download(url, dest):
     try:
         with urllib.request.urlopen(request, timeout=60) as response:
             Path(dest).write_bytes(response.read())
-    except OSError as exc:
+    except (OSError, http.client.HTTPException) as exc:
         raise BrowseError(str(exc)) from exc
 
 
@@ -51,11 +52,33 @@ def _lock_for(scene_id):
         return _download_locks.setdefault(scene_id, threading.Lock())
 
 
+def _validate_browse(part, scene_id):
+    """Raise BrowseError unless part decodes as a non-empty raster.
+
+    The dataset handle is dropped before returning so the caller's os.replace
+    is never racing an open GDAL handle on the same file.
+    """
+    valid = part.stat().st_size > 0
+    if valid:
+        try:
+            ds = gdal.Open(str(part))
+            valid = ds.RasterXSize > 0
+        except RuntimeError:
+            valid = False
+        finally:
+            ds = None
+    if not valid:
+        raise BrowseError(f"browse image is not a valid image for {scene_id}")
+
+
 def ensure_browse(scene_id, url, fetch=download):
     """The cached browse file for a scene, downloading it once if absent.
 
     Only the final file counts as cached; a leftover .part from an interrupted
     download is overwritten. Concurrent callers for one scene download once.
+    A downloaded file that does not decode as an image (an Earthdata login
+    page, a truncated body) is discarded rather than cached, so the next
+    request retries the fetch instead of failing forever.
     """
     target = browse_path(scene_id)
     if target.is_file():
@@ -69,6 +92,7 @@ def ensure_browse(scene_id, url, fetch=download):
         part = target.with_name(target.name + ".part")
         try:
             fetch(url, part)
+            _validate_browse(part, scene_id)
             os.replace(part, target)
         except BrowseError:
             part.unlink(missing_ok=True)

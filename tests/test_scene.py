@@ -110,6 +110,23 @@ class TestEnsureBrowse(SceneTestCase):
             scene.ensure_browse("S5", "https://data.lpdaac.earthdatacloud.nasa.gov/x/S5.png", fetch=fake)
         self.assertFalse((paths.SCENE_CACHE / "S5.png").exists())
 
+    def test_non_image_bytes_are_rejected_and_not_cached(self):
+        def fake(url, dest):
+            Path(dest).write_bytes(b"<html>Earthdata Login</html>")
+
+        with self.assertRaises(scene.BrowseError):
+            scene.ensure_browse("S6", "https://data.lpdaac.earthdatacloud.nasa.gov/x/S6.png", fetch=fake)
+        self.assertFalse((paths.SCENE_CACHE / "S6.png").exists())
+        self.assertFalse(list(paths.SCENE_CACHE.glob("*.part")))
+
+    def test_incomplete_read_through_download_is_a_browse_error(self):
+        import http.client
+
+        with patch.object(scene.urllib.request, "urlopen", side_effect=http.client.IncompleteRead(b"")):
+            with self.assertRaises(scene.BrowseError):
+                scene.download("https://data.lpdaac.earthdatacloud.nasa.gov/x/S7.png",
+                                self.tmp / "S7.png.part")
+
 
 class TestRenderTile(SceneTestCase):
     def setUp(self):
