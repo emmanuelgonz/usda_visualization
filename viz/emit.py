@@ -90,6 +90,7 @@ class FootprintIndex:
         return item[0] if item else None
 
     def scene_ring(self, scene_id):
+        """The footprint ring's coordinates for one granule ID, or None."""
         item = self._by_id.get(scene_id)
         return item[1] if item else None
 
