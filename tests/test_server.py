@@ -26,7 +26,7 @@ class ServerTestCase(unittest.TestCase):
         cls.tmp = Path(tempfile.mkdtemp())
         cls._saved = (paths.DATA, paths.CPC_DATA, paths.CDL_DATA, paths.MASK_DATA,
                       paths.CATALOG, paths.TILE_CACHE, paths.EMIT_FOOTPRINTS, paths.ECO_FOOTPRINTS, paths.BASINS2, paths.BASINS4,
-                      paths.HLS_DB)
+                      paths.RIVERS6, paths.RIVERS4, paths.RIVERS_NAMED, paths.HLS_DB)
 
         paths.DATA = cls.tmp / "data"
         paths.CPC_DATA = paths.DATA / "cpc"
@@ -38,6 +38,9 @@ class ServerTestCase(unittest.TestCase):
         paths.ECO_FOOTPRINTS = paths.DATA / "eco" / "footprints.geojson"
         paths.BASINS2 = cls.tmp / "vendor" / "basins2.geojson"
         paths.BASINS4 = cls.tmp / "vendor" / "basins4.geojson"
+        paths.RIVERS6 = cls.tmp / "vendor" / "rivers6.geojson"
+        paths.RIVERS4 = cls.tmp / "vendor" / "rivers4.geojson"
+        paths.RIVERS_NAMED = cls.tmp / "vendor" / "rivers_named.geojson"
         paths.HLS_DB = paths.DATA / "hls" / "hls.sqlite"
 
         (paths.CPC_DATA / "corn" / "cond").mkdir(parents=True)
@@ -144,7 +147,7 @@ class ServerTestCase(unittest.TestCase):
         cls.server.server_close()
         (paths.DATA, paths.CPC_DATA, paths.CDL_DATA, paths.MASK_DATA,
          paths.CATALOG, paths.TILE_CACHE, paths.EMIT_FOOTPRINTS, paths.ECO_FOOTPRINTS, paths.BASINS2, paths.BASINS4,
-         paths.HLS_DB) = cls._saved
+         paths.RIVERS6, paths.RIVERS4, paths.RIVERS_NAMED, paths.HLS_DB) = cls._saved
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
     def get(self, path):

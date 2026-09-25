@@ -25,3 +25,6 @@ TILE_CACHE = CACHE / "tiles"
 WEB = ROOT / "viz" / "web"
 BASINS2 = WEB / "vendor" / "basins2.geojson"
 BASINS4 = WEB / "vendor" / "basins4.geojson"
+RIVERS6 = WEB / "vendor" / "rivers6.geojson"          # HydroRIVERS, Strahler order 6 and above
+RIVERS4 = WEB / "vendor" / "rivers4.geojson"          # HydroRIVERS, orders 4 and 5
+RIVERS_NAMED = WEB / "vendor" / "rivers_named.geojson" # Natural Earth named rivers
