@@ -137,7 +137,7 @@ output { font-variant-numeric: tabular-nums; font-weight: 450; color: var(--mute
   border-top: 2px dashed #5b6770; vertical-align: middle;
 }
 .leaflet-eco-pane { cursor: default; }
-.readout-popup .emit-list .eco-tag { color: var(--muted); font-size: 11px; }
+.readout-popup .emit-list .tag { color: var(--muted); font-size: 11px; }
 
 /* HLS coverage */
 #hlsControls { display: grid; gap: 7px; padding-left: 22px; }
