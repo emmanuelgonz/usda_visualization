@@ -25,7 +25,8 @@ class ServerTestCase(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = Path(tempfile.mkdtemp())
         cls._saved = (paths.DATA, paths.CPC_DATA, paths.CDL_DATA, paths.MASK_DATA,
-                      paths.CATALOG, paths.TILE_CACHE, paths.EMIT_FOOTPRINTS, paths.ECO_FOOTPRINTS)
+                      paths.CATALOG, paths.TILE_CACHE, paths.EMIT_FOOTPRINTS, paths.ECO_FOOTPRINTS,
+                      paths.HLS_DB)
 
         paths.DATA = cls.tmp / "data"
         paths.CPC_DATA = paths.DATA / "cpc"
@@ -35,6 +36,7 @@ class ServerTestCase(unittest.TestCase):
         paths.TILE_CACHE = cls.tmp / "cache" / "tiles"
         paths.EMIT_FOOTPRINTS = paths.DATA / "emit" / "footprints.geojson"
         paths.ECO_FOOTPRINTS = paths.DATA / "eco" / "footprints.geojson"
+        paths.HLS_DB = paths.DATA / "hls" / "hls.sqlite"
 
         (paths.CPC_DATA / "corn" / "cond").mkdir(parents=True)
         paths.CDL_DATA.mkdir(parents=True)
@@ -70,6 +72,7 @@ class ServerTestCase(unittest.TestCase):
             feature("near-old", square(cls.lon, cls.lat, 0.5), "2023-07-01T18:00:00Z", 12.0),
             feature("near-new", square(cls.lon, cls.lat, 0.5), "2025-07-20T18:00:00Z", 40.0),
             feature("far", square(cls.lon + 20, cls.lat, 0.5), "2024-07-01T18:00:00Z", 1.0),
+            feature("no-tile", square(cls.lon + 10, cls.lat, 0.5), "2025-07-20T18:00:00Z", 5.0),
         ]}))
 
         def eco_feature(fid, ring, start, daynight):
@@ -90,6 +93,31 @@ class ServerTestCase(unittest.TestCase):
         coincidence.pair(emit_doc["features"], eco_doc["features"])
         paths.EMIT_FOOTPRINTS.write_text(json.dumps(emit_doc))
 
+        # An HLS store with one tile over the fixture centre and one far away.
+        from viz import hls
+
+        def acq(ur, start, cloud):
+            sensor, tile = hls.parse_ur(ur)
+            return {"id": ur, "tile": tile, "date": start[:10], "time": start, "sensor": sensor, "cloud": cloud}
+
+        hls_store = hls.Store(paths.HLS_DB)
+        hls_store.replace_month("S30", "2025-07", [
+            acq("HLS.S30.T99ZZZ.2025199T170000.v2.0", "2025-07-18T17:00:00Z", 10),
+            acq("HLS.S30.T99ZZZ.2025204T170000.v2.0", "2025-07-23T17:00:00Z", 10),
+            acq("HLS.S30.T98ZZZ.2025201T170000.v2.0", "2025-07-20T17:00:00Z", 0),
+        ], "2025-08-02T00:00:00+00:00")
+        hls_store.replace_month("L30", "2025-07", [
+            acq("HLS.L30.T99ZZZ.2025202T160000.v2.0", "2025-07-21T16:00:00Z", 80),
+        ], "2025-08-02T00:00:00+00:00")
+        hls_store.put_tile("T99ZZZ", square(cls.lon, cls.lat, 0.5))
+        hls_store.put_tile("T98ZZZ", square(cls.lon + 20, cls.lat, 0.5))
+        # Attach the HLS lists to the EMIT fixture the way ./run.sh hls would.
+        from viz import hls_pairs
+        emit_doc = json.loads(paths.EMIT_FOOTPRINTS.read_text())
+        hls_pairs.pair(emit_doc["features"], hls_store, hls.TileIndex(hls_store))
+        paths.EMIT_FOOTPRINTS.write_text(json.dumps(emit_doc))
+        hls_store.close()
+
         cls.server = tileserver.make_server(0)
         cls.port = cls.server.server_address[1]
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
@@ -104,7 +132,8 @@ class ServerTestCase(unittest.TestCase):
         cls.server.shutdown()
         cls.server.server_close()
         (paths.DATA, paths.CPC_DATA, paths.CDL_DATA, paths.MASK_DATA,
-         paths.CATALOG, paths.TILE_CACHE, paths.EMIT_FOOTPRINTS, paths.ECO_FOOTPRINTS) = cls._saved
+         paths.CATALOG, paths.TILE_CACHE, paths.EMIT_FOOTPRINTS, paths.ECO_FOOTPRINTS,
+         paths.HLS_DB) = cls._saved
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
     def get(self, path):
@@ -284,11 +313,11 @@ class TestEmitRoutes(ServerTestCase):
         status, ctype, body = self.get("/api/emit/footprints.geojson")
         self.assertEqual(status, 200)
         self.assertIn("geo+json", ctype)
-        self.assertEqual(len(json.loads(body)["features"]), 3)
+        self.assertEqual(len(json.loads(body)["features"]), 4)
 
     def test_catalog_reports_emit_count_and_fetched(self):
         catalog = json.loads(self.get("/api/catalog")[2])
-        self.assertEqual(catalog["emit_count"], 3)
+        self.assertEqual(catalog["emit_count"], 4)
         self.assertRegex(catalog["emit_fetched"], r"^\d{4}-\d{2}-\d{2}T")
 
     def test_point_lists_covering_granules_newest_first(self):
@@ -375,7 +404,207 @@ class TestEcoRoutes(ServerTestCase):
             moved.rename(paths.ECO_FOOTPRINTS)
 
 
+class TestHlsRoutes(ServerTestCase):
+    HLS_QUERY = "&start=2025-07-15&end=2025-07-31&cloud=30&sensor=ALL&window=7"
+
+    def test_tiles_are_served_as_geojson(self):
+        status, ctype, body = self.get("/api/hls/tiles.geojson")
+        self.assertEqual(status, 200)
+        self.assertEqual(ctype, "application/geo+json")
+        tiles = [f["properties"]["tile"] for f in json.loads(body)["features"]]
+        self.assertEqual(tiles, ["T98ZZZ", "T99ZZZ"])
+
+    def test_counts_apply_range_cloud_and_sensor(self):
+        _, ctype, body = self.get("/api/hls/counts?start=2025-07-15&end=2025-07-31&cloud=30&sensor=ALL")
+        self.assertEqual(ctype, "application/json")
+        self.assertEqual(json.loads(body), {"counts": {"T99ZZZ": 2, "T98ZZZ": 1}})
+        _, _, body = self.get("/api/hls/counts?start=2025-07-15&end=2025-07-31&cloud=30&sensor=L30")
+        self.assertEqual(json.loads(body), {"counts": {}})
+        _, _, body = self.get("/api/hls/counts?start=2025-07-19&end=2025-07-22&cloud=100&sensor=ALL")
+        self.assertEqual(json.loads(body), {"counts": {"T99ZZZ": 1, "T98ZZZ": 1}})
+
+    def test_counts_reject_bad_parameters(self):
+        for query in ("start=2025-07-15&end=2025-07-31&cloud=30&sensor=X30",
+                      "start=2025-7-15&end=2025-07-31&cloud=30&sensor=ALL",
+                      "start=2025-07-15&end=2025-07-31&cloud=abc&sensor=ALL",
+                      "end=2025-07-31&cloud=30&sensor=ALL"):
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                self.get("/api/hls/counts?" + query)
+            self.assertEqual(ctx.exception.code, 400, query)
+
+    def test_catalog_reports_hls_fields(self):
+        catalog = json.loads(self.get("/api/catalog")[2])
+        self.assertEqual(catalog["hls_count"], 4)
+        self.assertEqual(catalog["hls_tiles"], 2)
+        self.assertEqual(catalog["hls_fetched"], "2025-08-02T00:00:00+00:00")
+        self.assertFalse(catalog["hls_busy"])
+
+    def test_point_lists_covering_tiles_with_clear_counts(self):
+        report = json.loads(self.get(self.point_url() + self.HLS_QUERY)[2])
+        block = report["hls"]
+        self.assertEqual((block["start"], block["end"], block["cloud"], block["sensor"], block["window"]),
+                         ("2025-07-15", "2025-07-31", 30, "ALL", 7))
+        self.assertEqual(len(block["tiles"]), 1)
+        tile = block["tiles"][0]
+        self.assertEqual(tile["tile"], "T99ZZZ")
+        self.assertEqual(tile["clear"], 2)
+        self.assertEqual([a["date"] for a in tile["acq"]], ["2025-07-18", "2025-07-21", "2025-07-23"])
+        self.assertEqual(tile["acq"][1], {"date": "2025-07-21", "time": "2025-07-21T16:00:00Z",
+                                          "sensor": "L30", "cloud": 80})
+
+    def test_point_tags_emit_scenes_with_the_nearest_clear_acquisition(self):
+        report = json.loads(self.get(self.point_url() + self.HLS_QUERY)[2])
+        by_id = {g["id"]: g for g in report["emit"]}
+        self.assertEqual(by_id["near-new"]["hls"], {"date": "2025-07-18", "sensor": "S30", "cloud": 10, "dt": -2})
+        self.assertIsNone(by_id["near-old"]["hls"])
+        # The sensor filter applies to the tag: with S30 excluded only the cloudy L30 row remains.
+        report = json.loads(self.get(self.point_url() + "&start=2025-07-15&end=2025-07-31&cloud=30&sensor=L30&window=7")[2])
+        self.assertIsNone({g["id"]: g for g in report["emit"]}["near-new"]["hls"])
+        self.assertEqual(report["hls"]["tiles"][0]["clear"], 0)
+
+    def test_point_defaults_the_range_to_the_week_window(self):
+        # 2024 week 30 ends Sunday 2024-07-28; ±7 days is 07-21 to 08-04.
+        report = json.loads(self.get(self.point_url() + "&week=30")[2])
+        self.assertEqual((report["hls"]["start"], report["hls"]["end"]), ("2024-07-21", "2024-08-04"))
+        self.assertEqual(report["hls"]["tiles"][0]["acq"], [])
+
+    def test_point_payload_omits_the_map_only_pairing_list(self):
+        report = json.loads(self.get(self.point_url() + self.HLS_QUERY)[2])
+        for g in report["emit"]:
+            self.assertNotIn("hls_near", g)
+
+    def test_point_outside_every_tile_ring_leaves_emit_scenes_untagged(self):
+        # No covering tile means nothing is known about the HLS record here, which
+        # is not the same as a covering tile holding no clear acquisition.
+        url = (f"/api/point?lon={self.lon + 10:.6f}&lat={self.lat:.6f}"
+               "&crop=corn&year=2024&cdl_year=2024" + self.HLS_QUERY)
+        report = json.loads(self.get(url)[2])
+        self.assertEqual(report["hls"]["tiles"], [])
+        self.assertEqual([g["id"] for g in report["emit"]], ["no-tile"])
+        for g in report["emit"]:
+            self.assertNotIn("hls", g)
+
+    def test_point_without_a_week_has_a_null_range_but_still_tags_scenes(self):
+        # No week and no explicit range: the listing has nothing to bound, while
+        # the per-scene tags run over each scene's own date.
+        report = json.loads(self.get(self.point_url())[2])
+        block = report["hls"]
+        self.assertEqual((block["start"], block["end"]), (None, None))
+        self.assertEqual([t["tile"] for t in block["tiles"]], ["T99ZZZ"])
+        self.assertEqual(block["tiles"][0], {"tile": "T99ZZZ", "clear": 0, "acq": []})
+        by_id = {g["id"]: g for g in report["emit"]}
+        self.assertEqual(by_id["near-new"]["hls"],
+                         {"date": "2025-07-18", "sensor": "S30", "cloud": 10, "dt": -2})
+        self.assertIsNone(by_id["near-old"]["hls"])
+
+    def test_missing_store_gives_404_null_block_and_zero_fields(self):
+        # A tagged request first: if hls_block wrote onto the FootprintIndex's own
+        # dicts, the tag would survive into the no-store response below.
+        tagged = json.loads(self.get(self.point_url() + self.HLS_QUERY)[2])
+        self.assertIsNotNone({g["id"]: g for g in tagged["emit"]}["near-new"]["hls"])
+        moved = paths.HLS_DB.with_name("moved.sqlite")
+        paths.HLS_DB.rename(moved)
+        try:
+            for route in ("/api/hls/tiles.geojson", "/api/hls/counts?start=2025-07-15&end=2025-07-31&cloud=30&sensor=ALL"):
+                with self.assertRaises(urllib.error.HTTPError) as ctx:
+                    self.get(route)
+                self.assertEqual(ctx.exception.code, 404)
+                self.assertIn("run.sh hls", ctx.exception.read().decode())
+            report = json.loads(self.get(self.point_url() + self.HLS_QUERY)[2])
+            self.assertIsNone(report["hls"])
+            for g in report["emit"]:
+                self.assertNotIn("hls", g)
+            catalog = json.loads(self.get("/api/catalog")[2])
+            self.assertEqual((catalog["hls_count"], catalog["hls_tiles"], catalog["hls_fetched"]), (0, 0, None))
+            self.assertFalse(catalog["hls_busy"])   # absent is not busy
+        finally:
+            moved.rename(paths.HLS_DB)
+
+
+class TestHlsBusyStore(ServerTestCase):
+    """A fetch holding the write lock degrades every HLS read; nothing returns 500."""
+
+    HLS_QUERY = "&start=2025-07-15&end=2025-07-31&cloud=30&sensor=ALL&window=7"
+
+    def test_a_locked_store_degrades_the_catalog_the_routes_and_the_point(self):
+        import sqlite3
+        writer = sqlite3.connect(str(paths.HLS_DB), timeout=0.1)
+        self.addCleanup(writer.close)
+        writer.execute("BEGIN EXCLUSIVE")
+        try:
+            catalog = json.loads(self.get("/api/catalog")[2])
+            self.assertTrue(catalog["hls_busy"])
+            self.assertEqual((catalog["hls_count"], catalog["hls_tiles"], catalog["hls_fetched"]),
+                             (0, 0, None))
+            for route in ("/api/hls/tiles.geojson",
+                          "/api/hls/counts?start=2025-07-15&end=2025-07-31&cloud=30&sensor=ALL"):
+                with self.subTest(route=route), self.assertRaises(urllib.error.HTTPError) as ctx:
+                    self.get(route)
+                self.assertEqual(ctx.exception.code, 503)
+                self.assertIn("HLS store busy; a fetch is in progress, retry shortly",
+                              ctx.exception.read().decode())
+            report = json.loads(self.get(self.point_url() + self.HLS_QUERY)[2])
+            self.assertIsNone(report["hls"])
+            for g in report["emit"]:
+                self.assertNotIn("hls", g)
+        finally:
+            writer.rollback()
+        catalog = json.loads(self.get("/api/catalog")[2])
+        self.assertFalse(catalog["hls_busy"])
+        self.assertEqual((catalog["hls_count"], catalog["hls_tiles"]), (4, 2))
+
+
+class TestHlsPairsOnEmit(ServerTestCase):
+    def test_catalog_counts_emit_scenes_with_hls_lists(self):
+        catalog = json.loads(self.get("/api/catalog")[2])
+        self.assertEqual(catalog["emit_hls_paired"], 1)
+
+    def test_emit_features_carry_their_hls_lists(self):
+        geo = json.loads(self.get("/api/emit/footprints.geojson")[2])
+        by_id = {f["properties"]["id"]: f["properties"] for f in geo["features"]}
+        self.assertEqual([(h["date"], h["sensor"], h["cloud"], h["dt"]) for h in by_id["near-new"]["hls_near"]],
+                         [("2025-07-21", "L30", 80, 1), ("2025-07-18", "S30", 10, -2), ("2025-07-23", "S30", 10, 3)])
+        self.assertEqual(by_id["near-old"]["hls_near"], [])
+        self.assertEqual(by_id["no-tile"]["hls_near"], [])
+
+
 class TestInterfaceAssets(ServerTestCase):
+    def test_ecostress_plus_hls_coincidence_mark(self):
+        _, _, index = self.get("/")
+        html = index.decode()
+        self.assertIn('id="coincideAll"', html)
+        self.assertIn("Mark ECOSTRESS + HLS coincidence", html)
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        from viz import hls_pairs
+        self.assertIn("HLS_PAIR_DAYS = " + str(hls_pairs.PAIR_DAYS), text)
+        self.assertIn("emit_hls_paired", text)
+        self.assertIn("purple = ECOSTRESS + HLS coincident", text)
+        sync = text[text.index("function syncEmit"):text.index("function drawLegend")]
+        self.assertIn("state.days > 0", sync)
+        self.assertIn("days of HLS acquisitions", sync)
+        style = text[text.index("function emitStyleFor"):text.index("function loadEmit")]
+        self.assertIn("hlsPaired(p)", style)
+        self.assertIn("HLS_PAIR_FILL", style)
+        if not shutil.which("node"):
+            self.skipTest("node not available")
+        match = re.search(r"function hlsPaired\(p\) \{.*?\n  \}", text, re.S)
+        self.assertIsNotNone(match, "hlsPaired function not found in app.js")
+        script = (
+            'var HLS_PAIR_DAYS = 15; var state = { days: 7, hlsCloud: 30, hlsSensor: "ALL" };\n' + match.group(0) +
+            '\nvar near = { hls_near: [{ date: "x", sensor: "S30", cloud: 10, dt: -2 }] };\n'
+            'var farOnly = { hls_near: [{ date: "x", sensor: "S30", cloud: 0, dt: 20 }] };\n'
+            'var cloudy = { hls_near: [{ date: "x", sensor: "S30", cloud: 80, dt: 1 }, { date: "x", sensor: "L30", cloud: null, dt: 1 }] };\n'
+            'var out = [hlsPaired(near), hlsPaired(farOnly), hlsPaired(cloudy), hlsPaired({})];\n'
+            'state.days = 30; out.push(hlsPaired(farOnly));\n'
+            'state.hlsSensor = "L30"; out.push(hlsPaired(near));\n'
+            'state.hlsSensor = "ALL"; state.days = 0; out.push(hlsPaired(near));\n'
+            'console.log(out.join("|"));'
+        )
+        result = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "true|false|false|false|false|false|false")
+
     def test_swipe_clips_in_layer_space_and_tracks_map_moves(self):
         # Leaflet panes are 0x0 boxes, so an inset() clip on one collapses to
         # nothing and the CPC layer vanishes. The clip must be built from
@@ -544,7 +773,7 @@ class TestInterfaceAssets(ServerTestCase):
     def test_emit_layer_controls_and_canvas_renderer(self):
         _, _, index = self.get("/")
         html = index.decode()
-        for ident in ('id="emit"', 'id="emitCloud"', 'id="emitWindow"', 'id="emitLegend"'):
+        for ident in ('id="emit"', 'id="emitCloud"', 'id="timeWindow"', 'id="emitLegend"'):
             self.assertIn(ident, html)
         _, _, app = self.get("/static/app.js")
         text = app.decode()
@@ -575,6 +804,138 @@ class TestInterfaceAssets(ServerTestCase):
         result = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "+2 h 0 m|+1 h 0 m|−41 s|+45 s|+24 h 0 m")
+
+    def test_time_window_is_shared_above_the_emit_block(self):
+        _, _, index = self.get("/")
+        html = index.decode()
+        self.assertIn('id="timeWindow"', html)
+        self.assertNotIn('id="emitWindow"', html)
+        self.assertLess(html.index('id="timeWindow"'), html.index('id="emit"'))
+        self.assertIn("Time window", html)
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        self.assertIn("function windowBounds()", text)
+        self.assertNotIn("emitWindowBounds", text)
+        self.assertIn("state.days", text)
+
+    def test_hls_layer_controls_and_routes(self):
+        _, _, index = self.get("/")
+        html = index.decode()
+        for ident in ('id="hls"', 'name="hlsMode"', 'id="hlsRange"', 'id="hlsCloud"',
+                      'name="hlsSensor"', 'id="hlsLegend"'):
+            self.assertIn(ident, html)
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        self.assertIn("/api/hls/tiles.geojson", text)
+        self.assertIn("/api/hls/counts?", text)
+        self.assertIn("HLS_CLASSES", text)
+        for colour in ("#e7d4e8", "#c2a5cf", "#9970ab", "#762a83", "#40004b"):
+            self.assertIn(colour, text)
+        self.assertIn('map.createPane("hls")', text)
+        self.assertIn("451", text[text.index('map.getPane("hls")'):text.index('map.getPane("hls")') + 80])
+        self.assertIn("setTimeout(fetchHlsCounts, 150)", text)
+
+    def test_hls_range_resolves_week_window_and_season(self):
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        if not shutil.which("node"):
+            self.skipTest("node not available")
+        parts = []
+        for name in ("weekSunday(year, week)", "isoDate(ms)", "hlsRange()"):
+            match = re.search(r"function " + re.escape(name) + r" \{.*?\n  \}", text, re.S)
+            self.assertIsNotNone(match, name + " not found in app.js")
+            parts.append(match.group(0))
+        script = (
+            'var state = { week: 30, year: 2025, days: 7, hlsMode: "week", crop: "corn", var: "cond" };\n'
+            "function weeksFor() { return [14, 30, 44]; }\n" + "\n".join(parts) + "\n"
+            "var a = hlsRange(); state.hlsMode = \"season\"; var b = hlsRange();\n"
+            "state.days = 0; state.hlsMode = \"week\"; var c = hlsRange();\n"
+            "state.week = null; var d = hlsRange();\n"
+            "console.log([a.start, a.end, b.start, b.end, c.start, c.end, String(d)].join(\"|\"));"
+        )
+        result = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(),
+                         "2025-07-20|2025-08-03|2025-03-31|2025-11-02|2025-07-27|2025-07-27|null")
+
+    def test_catalog_boot_fetch_reports_a_failed_request(self):
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        boot = text[text.index('fetch("/api/catalog")'):]
+        self.assertIn(".catch(", boot)
+        self.assertIn("Catalog request failed; is the server running? Reload to retry.", boot)
+        self.assertIn("hls_busy", text)
+
+    def test_hls_layer_is_gated_on_tile_rings_as_well_as_rows(self):
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        body = text[text.index("function loadHls"):text.index("function syncEco")]
+        self.assertIn("hls_tiles", body)
+        self.assertIn("HLS tile rings not fetched yet; let ./run.sh hls finish.", body)
+        self.assertIn("HLS store busy; a fetch is in progress. Reload when it finishes.", body)
+        self.assertIn("g.hls === null", text)
+        self.assertIn("no week selected", text)
+
+    def test_emit_browse_opens_an_in_page_viewer(self):
+        _, _, index = self.get("/")
+        html = index.decode()
+        for ident in ('id="viewer"', 'id="viewerMap"', 'id="viewerMeta"', 'id="viewerClose"', 'id="viewerFit"'):
+            self.assertIn(ident, html)
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        self.assertIn('class="browse-scene"', text)
+        self.assertIn("function openViewer(g)", text)
+        self.assertIn("function closeViewer()", text)
+        self.assertIn("wireBrowseLinks(popup, report)", text)
+        self.assertIn('e.key === "Escape"', text)
+        # The picture pans and zooms in a pixel-space Leaflet map, never in geographic coordinates.
+        viewer = text[text.index("function openViewer"):text.index("function closeViewer")]
+        self.assertIn("L.CRS.Simple", viewer)
+        self.assertIn("L.imageOverlay(g.browse, viewerBounds)", viewer)
+        self.assertIn("VIEWER_MAX_ZOOM", text)
+        # The browse image is never placed on the map: no scene tile route, pane, or overlay code.
+        self.assertNotIn("/tiles/emit/", text)
+        self.assertNotIn('createPane("scene")', text)
+        _, _, css = self.get("/static/style.css")
+        self.assertIn("#viewer[hidden]", css.decode())
+
+    def test_readout_lists_are_collapsible_and_remembered(self):
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        self.assertIn("function foldable(key, heading, body)", text)
+        self.assertIn('<details class="fold" data-fold=', text)
+        self.assertIn('<summary class="section">', text)
+        for key in ('foldable("emit"', 'foldable("eco"', 'foldable("hls"'):
+            self.assertIn(key, text)
+        self.assertIn('addEventListener("toggle"', text)
+        # A re-render on toggle would rebuild the section closed; only the layout is redone.
+        wiring = text[text.index("function wireFolds"):text.index("function showReadout")]
+        self.assertNotIn("popup.update()", wiring)
+        for step in ("popup._updateLayout()", "popup._updatePosition()", "popup._adjustPan()"):
+            self.assertIn(step, wiring)
+        self.assertIn("readoutOpen[details.dataset.fold] = details.open", text)
+        self.assertIn("maxHeight: Math.round(map.getSize().y * 0.6)", text)
+        _, _, css = self.get("/static/style.css")
+        self.assertIn("details.fold[open]", css.decode())
+        self.assertIn("leaflet-popup-scrolled", css.decode())
+
+    def test_readout_lists_hls_acquisitions_and_tags_emit_scenes(self):
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        self.assertIn("HLS acquisitions", text)
+        self.assertIn("clear of", text)
+        self.assertIn("no clear HLS within", text)
+        self.assertIn("&start=", text)
+        self.assertIn("&window=", text)
+        self.assertIn("slice(0, 20)", text)
+        if not shutil.which("node"):
+            self.skipTest("node not available")
+        match = re.search(r"function formatDays\(dt\) \{.*?\n  \}", text, re.S)
+        self.assertIsNotNone(match, "formatDays function not found in app.js")
+        script = match.group(0) + "\nconsole.log([0, -2, 3, 1].map(formatDays).join(\"|\"));"
+        result = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "same day|−2 d|+3 d|+1 d")
 
 
 if __name__ == "__main__":

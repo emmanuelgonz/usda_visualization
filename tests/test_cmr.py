@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import shutil
 import tempfile
@@ -33,7 +35,9 @@ class TestFetchAll(unittest.TestCase):
             asked.append(page_num)
             return pages.get(page_num, [])
 
-        self.assertEqual(len(cmr.fetch_all(fake)), 3)
+        with contextlib.redirect_stdout(io.StringIO()):   # the paging progress lines
+            entries = cmr.fetch_all(fake)
+        self.assertEqual(len(entries), 3)
         self.assertEqual(asked, [1, 2, 3])
 
 
@@ -64,6 +68,61 @@ class TestWriteGeojson(unittest.TestCase):
         cmr.write_geojson([{"type": "Feature", "geometry": None, "properties": {}}], out)
         self.assertEqual(json.loads(out.read_text())["type"], "FeatureCollection")
         self.assertFalse(list(tmp.glob("**/*.part")))
+
+
+class TestPolygonRing(unittest.TestCase):
+    def test_swaps_to_lon_lat_and_closes(self):
+        entry = {"polygons": [["42.0 -94.0 42.0 -93.0 43.0 -93.0"]]}
+        self.assertEqual(cmr.polygon_ring(entry),
+                         [[-94.0, 42.0], [-93.0, 42.0], [-93.0, 43.0], [-94.0, 42.0]])
+
+    def test_already_closed_ring_is_not_doubled(self):
+        entry = {"polygons": [["42.0 -94.0 42.0 -93.0 43.0 -93.0 42.0 -94.0"]]}
+        self.assertEqual(len(cmr.polygon_ring(entry)), 4)
+
+    def test_missing_polygon_is_none(self):
+        self.assertIsNone(cmr.polygon_ring({}))
+        self.assertIsNone(cmr.polygon_ring({"polygons": []}))
+        self.assertIsNone(cmr.polygon_ring({"polygons": [[]]}))
+
+
+class TestFetchResponse(unittest.TestCase):
+    def test_retries_then_returns_body_and_headers(self):
+        import io
+        from unittest import mock
+
+        class Response(io.BytesIO):
+            headers = {"CMR-Hits": "9675"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        calls = []
+
+        def fake_urlopen(url, timeout):
+            calls.append(url)
+            if len(calls) == 1:
+                raise OSError("boom")
+            return Response(b"a,b\n1,2\n")
+
+        with mock.patch("urllib.request.urlopen", fake_urlopen), mock.patch("time.sleep"):
+            body, headers = cmr.fetch_response("http://x")
+        self.assertEqual(body, b"a,b\n1,2\n")
+        self.assertEqual(headers.get("CMR-Hits"), "9675")
+        self.assertEqual(len(calls), 2)
+
+    def test_gives_up_after_three_failures(self):
+        from unittest import mock
+
+        def fake_urlopen(url, timeout):
+            raise OSError("boom")
+
+        with mock.patch("urllib.request.urlopen", fake_urlopen), mock.patch("time.sleep"):
+            with self.assertRaises(OSError):
+                cmr.fetch_response("http://x")
 
 
 if __name__ == "__main__":

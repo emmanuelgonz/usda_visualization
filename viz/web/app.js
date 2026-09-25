@@ -17,15 +17,20 @@
     opacity: 0.7,
     playing: false,
     timer: null,
+    days: 7,
     emit: false,
     emitCloud: 30,
-    emitWindow: 7,
     emitOnlyWindow: false,
     coincide: false,
     coincideStep: 2,
+    coincideAll: false,
     coincideOnly: false,
     eco: false,
-    ecoDay: "DAY"
+    ecoDay: "DAY",
+    hls: false,
+    hlsMode: "week",
+    hlsCloud: 30,
+    hlsSensor: "ALL"
   };
 
   // Hardcoded so the first paint fits CONUS before the boundary file loads.
@@ -59,7 +64,52 @@
   var ecoLayer = null;
   var ecoLoaded = false;
 
+  map.createPane("hls");
+  map.getPane("hls").style.zIndex = 451;   // above CPC, below ECOSTRESS and EMIT
+  var hlsRenderer = L.canvas({ pane: "hls" });
+  // Sequential purples, away from the CDL crop colours and both CPC ramps.
+  var HLS_CLASSES = [
+    { min: 1, max: 1, colour: "#e7d4e8", label: "1" },
+    { min: 2, max: 2, colour: "#c2a5cf", label: "2" },
+    { min: 3, max: 4, colour: "#9970ab", label: "3–4" },
+    { min: 5, max: 8, colour: "#762a83", label: "5–8" },
+    { min: 9, max: Infinity, colour: "#40004b", label: "9+" }
+  ];
+  var HLS_OUTLINE = "#40004b";
+  var hlsLayer = null;
+  var hlsLoaded = false;
+  var hlsCounts = {};
+  var hlsTimer = null;
+  var hlsRequest = 0;
+
+  function hlsColour(n) {
+    for (var i = 0; i < HLS_CLASSES.length; i++) {
+      if (n >= HLS_CLASSES[i].min && n <= HLS_CLASSES[i].max) { return HLS_CLASSES[i].colour; }
+    }
+    return null;
+  }
+
   function coincideSeconds() { return COINCIDE_STEPS[state.coincideStep] * 60; }
+
+  // EMIT features carry the HLS acquisitions of their tile within ±HLS_PAIR_DAYS
+  // (viz/hls_pairs.py), so the marking clamps the shared window to that span.
+  var HLS_PAIR_DAYS = 15;
+  var HLS_PAIR_FILL = "#762a83";
+
+  // True when the scene has a stored HLS acquisition inside the shared window
+  // that passes the HLS cloud threshold and sensor filter.
+  function hlsPaired(p) {
+    var days = Math.min(state.days, HLS_PAIR_DAYS);
+    var list = p.hls_near || [];
+    for (var i = 0; i < list.length; i++) {
+      var h = list[i];
+      if (Math.abs(h.dt) > days) { continue; }
+      if (h.cloud === null || h.cloud === undefined || h.cloud > state.hlsCloud) { continue; }
+      if (state.hlsSensor !== "ALL" && h.sensor !== state.hlsSensor) { continue; }
+      return true;
+    }
+    return false;
+  }
 
   function formatDt(seconds) {
     var sign = seconds < 0 ? "−" : "+";
@@ -70,6 +120,11 @@
     var totalM = Math.round(s / 60);
     if (totalM < 60) { return sign + totalM + " m"; }
     return sign + Math.floor(totalM / 60) + " h " + (totalM % 60) + " m";
+  }
+
+  function formatDays(dt) {
+    if (dt === 0) { return "same day"; }
+    return (dt < 0 ? "−" : "+") + Math.abs(dt) + " d";
   }
 
   function stepLabel(step) {
@@ -85,6 +140,7 @@
   var cdlLayer = null;
   var cpcLayer = null;
   var readoutPopup = null;
+  var readoutOpen = {};      // which collapsible readout sections the user left open
   var swipeHandle = null;
   var swipeFraction = 0.5;
 
@@ -252,11 +308,31 @@
     return new Date(week1Monday.getTime() + ((week - 1) * 7 + 6) * 86400000);
   }
 
-  function emitWindowBounds() {
-    if (!state.emitWindow || state.week === null) { return null; }
+  function windowBounds() {
+    if (!state.days || state.week === null) { return null; }
     var centre = weekSunday(state.year, state.week).getTime();
-    var span = state.emitWindow * 86400000;
+    var span = state.days * 86400000;
     return [centre - span, centre + span];
+  }
+
+  function isoDate(ms) {
+    return new Date(ms).toISOString().slice(0, 10);
+  }
+
+  // The HLS counting range: the shared ±days window around the CPC week's Sunday,
+  // or the crop's reporting season (Monday of its first CPC week to Sunday of its last).
+  function hlsRange() {
+    if (state.week === null || state.week === undefined) { return null; }
+    if (state.hlsMode === "season") {
+      var weeks = weeksFor(state.crop, state.var, state.year);
+      if (!weeks.length) { return null; }
+      var first = weekSunday(state.year, weeks[0]).getTime() - 6 * 86400000;
+      var last = weekSunday(state.year, weeks[weeks.length - 1]).getTime();
+      return { start: isoDate(first), end: isoDate(last) };
+    }
+    var centre = weekSunday(state.year, state.week).getTime();
+    var span = state.days * 86400000;
+    return { start: isoDate(centre - span), end: isoDate(centre + span) };
   }
 
   function emitStyleFor(bounds) {
@@ -265,14 +341,19 @@
       var p = feature.properties;
       var inWindow = !!(bounds && p._t >= bounds[0] && p._t <= bounds[1]);
       var nearest = p.eco && p.eco.length ? p.eco[0].dt : null;
-      var coincident = state.coincide && nearest !== null && Math.abs(nearest) <= maxDt;
+      var ecoHit = nearest !== null && Math.abs(nearest) <= maxDt;
+      var triple = state.coincideAll && ecoHit && hlsPaired(p);
+      var coincident = state.coincide && ecoHit;
+      var marked = triple || coincident;
+      var anyMark = state.coincide || state.coincideAll;
       var hidden = (p.cloud !== null && p.cloud > state.emitCloud) ||
                    (state.emitOnlyWindow && bounds && !inWindow) ||
-                   (state.coincide && state.coincideOnly && !coincident);
+                   (anyMark && state.coincideOnly && !marked);
       var yearColour = EMIT_YEAR_COLOURS[p.year] || "#666";
       return {
         stroke: !hidden, interactive: !hidden,
-        fill: coincident && !hidden, fillColor: yearColour, fillOpacity: (coincident && !hidden) ? 0.25 : 0,
+        fill: marked && !hidden, fillColor: triple ? HLS_PAIR_FILL : yearColour,
+        fillOpacity: !marked || hidden ? 0 : (triple ? 0.35 : 0.25),
         color: inWindow ? EMIT_HIGHLIGHT : yearColour,
         weight: inWindow ? 2.5 : 1,
         opacity: inWindow ? 0.95 : (bounds ? 0.35 : 0.8)
@@ -285,7 +366,7 @@
     emitLoaded = true;
     fetch("/api/emit/footprints.geojson").then(function (r) { return r.json(); }).then(function (geo) {
       emitLayer = L.geoJSON(geo, {
-        pane: "emit", renderer: emitRenderer, style: emitStyleFor(emitWindowBounds()),
+        pane: "emit", renderer: emitRenderer, style: emitStyleFor(windowBounds()),
         onEachFeature: function (f, layer) {
           var p = f.properties;
           f.properties._t = Date.parse(f.properties.start);
@@ -302,7 +383,9 @@
     el("emitLegend").innerHTML =
       years.map(function (y) { return '<span style="--swatch:' + EMIT_YEAR_COLOURS[y] + '">' + y + "</span>"; }).join("") +
       '<span class="hl" style="--swatch:' + EMIT_HIGHLIGHT + '">within window</span>' +
-      (state.catalog.eco_count > 0 ? '<span class="fillsw">filled = ECOSTRESS coincident</span>' : "");
+      (state.catalog.eco_count > 0 ? '<span class="fillsw">filled = ECOSTRESS coincident</span>' : "") +
+      (state.catalog.eco_count > 0 && state.catalog.emit_hls_paired > 0
+        ? '<span class="fillsw hls">purple = ECOSTRESS + HLS coincident</span>' : "");
   }
 
   function ecoStyleFor(bounds) {
@@ -325,7 +408,7 @@
     ecoLoaded = true;
     fetch("/api/eco/footprints.geojson").then(function (r) { return r.json(); }).then(function (geo) {
       ecoLayer = L.geoJSON(geo, {
-        pane: "eco", renderer: ecoRenderer, style: ecoStyleFor(emitWindowBounds()),
+        pane: "eco", renderer: ecoRenderer, style: ecoStyleFor(windowBounds()),
         onEachFeature: function (f, layer) {
           var p = f.properties;
           p._t = Date.parse(p.start);
@@ -342,6 +425,112 @@
     el("ecoLegend").innerHTML = "<span>ECOSTRESS swath, bounding box (≈550 km), not the true outline</span>";
   }
 
+  function hlsStyleFor(counts) {
+    return function (feature) {
+      var n = counts[feature.properties.tile] || 0;
+      var colour = hlsColour(n);
+      return {
+        stroke: true, interactive: true,
+        color: HLS_OUTLINE, weight: 0.5, opacity: n ? 0.8 : 0.25,
+        fill: !!colour, fillColor: colour || "#ffffff", fillOpacity: colour ? 0.55 : 0
+      };
+    };
+  }
+
+  function applyHlsCounts() {
+    if (!hlsLayer) { return; }
+    hlsLayer.setStyle(hlsStyleFor(hlsCounts));
+    hlsLayer.eachLayer(function (layer) {
+      var tile = layer.feature.properties.tile;
+      layer.setTooltipContent(tile + ": " + (hlsCounts[tile] || 0) + " clear");
+    });
+    drawHlsLegend();
+  }
+
+  function fetchHlsCounts() {
+    var range = hlsRange();
+    if (!hlsLayer || !state.hls || !range) { return; }
+    var seq = ++hlsRequest;
+    fetch("/api/hls/counts?start=" + range.start + "&end=" + range.end +
+          "&cloud=" + state.hlsCloud + "&sensor=" + state.hlsSensor)
+      .then(function (r) { return r.json(); })
+      .then(function (body) {
+        if (seq !== hlsRequest) { return; }   // a newer request has superseded this one
+        hlsCounts = body.counts || {};
+        applyHlsCounts();
+      })
+      .catch(function () { /* keep the last counts */ });
+  }
+
+  function refreshHlsCounts() {
+    clearTimeout(hlsTimer);
+    hlsTimer = setTimeout(fetchHlsCounts, 150);
+  }
+
+  function loadHls() {
+    if (hlsLoaded || !(state.catalog.hls_count > 0 && state.catalog.hls_tiles > 0)) { return; }
+    hlsLoaded = true;
+    fetch("/api/hls/tiles.geojson").then(function (r) { return r.json(); }).then(function (geo) {
+      hlsLayer = L.geoJSON(geo, {
+        pane: "hls", renderer: hlsRenderer, style: hlsStyleFor(hlsCounts),
+        onEachFeature: function (f, layer) {
+          layer.bindTooltip(f.properties.tile + ": 0 clear", { sticky: true, className: "emit-tip" });
+        }
+      });
+      syncHls();
+    }).catch(function () { hlsLoaded = false; });
+  }
+
+  function drawHlsLegend() {
+    var range = hlsRange();
+    if (!state.hls) {
+      el("hlsRange").textContent = "";
+      el("hlsLegend").innerHTML = "";
+      return;
+    }
+    el("hlsRange").textContent = range
+      ? (state.hlsMode === "season" ? "Season " : "Window ") + range.start + " to " + range.end
+      : "No CPC weeks for this selection";
+    el("hlsLegend").innerHTML =
+      '<span class="zero" style="--swatch:#fff">0</span>' +
+      HLS_CLASSES.map(function (c) {
+        return '<span style="--swatch:' + c.colour + '">' + c.label + "</span>";
+      }).join("") + "<span>clear acquisitions per MGRS tile</span>";
+  }
+
+  function syncHls() {
+    // Rows without rings colour nothing, and a running fetch holds the store's
+    // write lock, so both leave the layer off with the reason on the label.
+    var busy = !!state.catalog.hls_busy;
+    var available = !busy && state.catalog.hls_count > 0 && state.catalog.hls_tiles > 0;
+    var box = el("hls");
+    box.disabled = !available;
+    box.parentNode.title = available ? ""
+      : busy ? "HLS store busy; a fetch is in progress. Reload when it finishes."
+      : state.catalog.hls_count > 0 ? "HLS tile rings not fetched yet; let ./run.sh hls finish."
+      : "No HLS store; run ./run.sh hls";
+    if (!available && state.hls) { state.hls = false; box.checked = false; }
+    // Cloud and Sensor also drive the ECOSTRESS + HLS mark, so they stay live
+    // while that mark is on; Mode only shapes the tile counts.
+    var active = available && (state.hls || state.coincideAll);
+    el("hlsControls").classList.toggle("disabled", !active);
+    el("hlsCloud").disabled = !active;
+    Array.prototype.forEach.call(document.getElementsByName("hlsSensor"), function (radio) {
+      radio.disabled = !active;
+    });
+    Array.prototype.forEach.call(document.getElementsByName("hlsMode"), function (radio) {
+      radio.disabled = !(available && state.hls);
+    });
+    if (!state.hls && hlsLayer && map.hasLayer(hlsLayer)) { map.removeLayer(hlsLayer); }
+    if (!state.hls) { drawHlsLegend(); }
+    if (state.hls) {
+      if (!hlsLayer) { loadHls(); return; }
+      if (!map.hasLayer(hlsLayer)) { hlsLayer.addTo(map); }
+      drawHlsLegend();
+      refreshHlsCounts();
+    }
+  }
+
   function syncEco() {
     var available = state.catalog.eco_count > 0;
     var box = el("eco");
@@ -356,7 +545,7 @@
     if (state.eco) {
       if (!ecoLayer) { loadEco(); return; }
       if (!map.hasLayer(ecoLayer)) { ecoLayer.addTo(map); }
-      ecoLayer.setStyle(ecoStyleFor(emitWindowBounds()));
+      ecoLayer.setStyle(ecoStyleFor(windowBounds()));
     }
   }
 
@@ -366,21 +555,33 @@
     box.disabled = !available;
     box.parentNode.title = available ? "" : "No EMIT footprints; run ./run.sh emit";
     el("emitControls").classList.toggle("disabled", !(available && state.emit));
-    el("emitCloud").disabled = el("emitWindow").disabled = !(available && state.emit);
+    el("emitCloud").disabled = !(available && state.emit);
     // "Only within window" needs a window to filter by.
-    var onlyOk = available && state.emit && state.emitWindow > 0;
+    var onlyOk = available && state.emit && state.days > 0;
     el("emitOnlyWindow").disabled = !onlyOk;
     if (!onlyOk && state.emitOnlyWindow) { state.emitOnlyWindow = false; el("emitOnlyWindow").checked = false; }
     var coincideOk = available && state.emit && state.catalog.eco_count > 0;
     el("coincide").disabled = !coincideOk;
-    el("coincideWindow").disabled = el("coincideOnly").disabled = !(coincideOk && state.coincide);
+    // The mark reads the stored ±HLS_PAIR_DAYS lists through the shared window,
+    // so it needs a window (like "Only scenes within window") and caps at the span.
+    var paired = coincideOk && state.catalog.emit_hls_paired > 0;
+    var allOk = paired && state.days > 0;
+    el("coincideAll").disabled = !allOk;
+    el("coincideAll").parentNode.title =
+      !coincideOk ? "" :
+      !paired ? "No HLS pairs on the EMIT scenes; run ./run.sh hls" :
+      state.days === 0 ? "Needs a time window" :
+      state.days > HLS_PAIR_DAYS ? "Uses ±" + HLS_PAIR_DAYS + " days of HLS acquisitions" : "";
     if (!coincideOk && state.coincide) { state.coincide = false; el("coincide").checked = false; }
-    if (!state.coincide && state.coincideOnly) { state.coincideOnly = false; el("coincideOnly").checked = false; }
+    if (!allOk && state.coincideAll) { state.coincideAll = false; el("coincideAll").checked = false; }
+    var anyMark = state.coincide || state.coincideAll;
+    el("coincideWindow").disabled = el("coincideOnly").disabled = !(coincideOk && anyMark);
+    if (!anyMark && state.coincideOnly) { state.coincideOnly = false; el("coincideOnly").checked = false; }
     if (!state.emit && emitLayer && map.hasLayer(emitLayer)) { map.removeLayer(emitLayer); }
     if (state.emit) {
       if (!emitLayer) { loadEmit(); return; }
       if (!map.hasLayer(emitLayer)) { emitLayer.addTo(map); }
-      emitLayer.setStyle(emitStyleFor(emitWindowBounds()));
+      emitLayer.setStyle(emitStyleFor(windowBounds()));
     }
   }
 
@@ -466,6 +667,90 @@
     return value === null || value === undefined ? "—" : (value * 100).toFixed(1) + "%";
   }
 
+  // A collapsible readout section: the heading with its count stays visible,
+  // the list opens on click. A heading with nothing to list is a plain line.
+  function foldable(key, heading, body) {
+    if (!body) { return '<p class="section">' + heading + "</p>"; }
+    return '<details class="fold" data-fold="' + key + '"' + (readoutOpen[key] ? " open" : "") + ">" +
+           '<summary class="section">' + heading + "</summary>" + body + "</details>";
+  }
+
+  // Wire the toggles inside an open popup: remember the choice and re-measure
+  // the box so an expanded list gets the height cap and stays on screen.
+  // popup.update() would re-render the content from its HTML string, which
+  // rebuilds the section closed, so the layout, position, and pan steps of
+  // Leaflet 1.9.4's update() are called directly instead.
+  // The EMIT browse image is a picture in the sensor's own grid with no
+  // coordinates, so it is shown over the map rather than placed on it.
+  // A second Leaflet map in pixel space (CRS.Simple) shows the quicklook with
+  // wheel and pinch zoom, drag panning, and the usual controls. Zoom 0 is one
+  // screen pixel per image pixel; VIEWER_MAX_ZOOM caps magnification at 8x.
+  var VIEWER_MAX_ZOOM = 3;
+  var viewerMap = null;
+  var viewerImage = null;
+  var viewerBounds = null;
+
+  function viewerFit() {
+    if (viewerMap && viewerBounds) { viewerMap.fitBounds(viewerBounds); }
+  }
+
+  function openViewer(g) {
+    el("viewerMeta").innerHTML =
+      (g.start || "").slice(0, 10) + " · " + g.id + " · " +
+      (g.cloud === null || g.cloud === undefined ? "?" : g.cloud.toFixed(0) + "%") + " cloud" +
+      (g.data ? ' · <a href="' + g.data + '" target="_blank" rel="noopener">data</a>' : "") +
+      ' · <a href="' + g.browse + '" target="_blank" rel="noopener">open in a new tab</a>';
+    el("viewer").hidden = false;
+    if (!viewerMap) {
+      viewerMap = L.map("viewerMap", { crs: L.CRS.Simple, minZoom: -5, maxZoom: VIEWER_MAX_ZOOM,
+                                       zoomSnap: 0.25, attributionControl: false });
+    }
+    if (viewerImage) { viewerMap.removeLayer(viewerImage); viewerImage = null; }
+    var probe = new Image();
+    probe.onload = function () {
+      // CRS.Simple takes [y, x]; the image spans its pixel size, so zoom 0 is 1:1.
+      viewerBounds = L.latLngBounds([[0, 0], [probe.naturalHeight, probe.naturalWidth]]);
+      viewerImage = L.imageOverlay(g.browse, viewerBounds).addTo(viewerMap);
+      viewerMap.setMaxBounds(viewerBounds.pad(0.5));
+      viewerMap.invalidateSize();
+      viewerFit();
+    };
+    probe.src = g.browse;
+  }
+
+  function closeViewer() {
+    el("viewer").hidden = true;
+  }
+
+  // "browse" links inside an open popup open the viewer; the href stays for right-click.
+  function wireBrowseLinks(popup, report) {
+    var node = popup.getElement();
+    if (!node) { return; }
+    var byId = {};
+    (report.emit || []).forEach(function (g) { byId[g.id] = g; });
+    Array.prototype.forEach.call(node.querySelectorAll("a.browse-scene"), function (link) {
+      link.addEventListener("click", function (event) {
+        var g = byId[link.dataset.id];
+        if (!g) { return; }
+        event.preventDefault();
+        openViewer(g);
+      });
+    });
+  }
+
+  function wireFolds(popup) {
+    var node = popup.getElement();
+    if (!node) { return; }
+    Array.prototype.forEach.call(node.querySelectorAll("details.fold"), function (details) {
+      details.addEventListener("toggle", function () {
+        readoutOpen[details.dataset.fold] = details.open;
+        popup._updateLayout();
+        popup._updatePosition();
+        popup._adjustPan();
+      });
+    });
+  }
+
   function showReadout(report) {
     var cover = report.cover || {};
     var noCover = (cover.primary === null || cover.primary === undefined) &&
@@ -498,32 +783,37 @@
     }
 
     var granules = report.emit || [];
-    html += '<p class="section">EMIT scenes covering this point: ' + granules.length + "</p>";
+    var emitBody = "";
     if (granules.length) {
       var centre = report.week_sunday ? Date.parse(report.week_sunday + "T00:00:00Z") : null;
-      var bounds = emitWindowBounds();
+      var bounds = windowBounds();
       var sorted = granules.slice().sort(function (a, b) {
         if (centre === null) { return Date.parse(b.start) - Date.parse(a.start); }
         return Math.abs(Date.parse(a.start) - centre) - Math.abs(Date.parse(b.start) - centre);
       });
       var shown = sorted.slice(0, 15);
-      html += '<ul class="emit-list">' + shown.map(function (g) {
+      emitBody += '<ul class="emit-list">' + shown.map(function (g) {
         var t = Date.parse(g.start);
         var inWin = bounds && t >= bounds[0] && t <= bounds[1];
         return "<li" + (inWin ? ' class="in"' : "") + '><span class="when">' + g.start.slice(0, 10) + "</span>" +
                "<span>" + (g.cloud === null ? "?" : g.cloud.toFixed(0) + "%") + " cloud</span>" +
-               (g.browse ? ' <a href="' + g.browse + '" target="_blank" rel="noopener">browse</a>' : "") +
+               (g.browse ? ' <a href="' + g.browse + '" class="browse-scene" data-id="' + g.id + '">browse</a>' : "") +
                (g.data ? ' <a href="' + g.data + '" target="_blank" rel="noopener">data</a>' : "") +
                (g.eco && g.eco.length && state.coincide && Math.abs(g.eco[0].dt) <= coincideSeconds()
                  ? ' <span class="eco-tag">ECOSTRESS ' + formatDt(g.eco[0].dt) + "</span>" : "") +
+               (g.hls
+                 ? ' <span class="eco-tag">HLS ' + g.hls.sensor + " " + formatDays(g.hls.dt) + ", " +
+                   (g.hls.cloud === null ? "?" : g.hls.cloud) + "% cloud</span>"
+                 : (g.hls === null ? ' <span class="eco-tag">no clear HLS within ±' + report.hls.window + " d</span>" : "")) +
                (inWin ? " <span>★</span>" : "") + "</li>";
       }).join("") + "</ul>";
       if (granules.length > shown.length) {
-        html += '<p class="note">and ' + (granules.length - shown.length) + " more</p>";
+        emitBody += '<p class="note">and ' + (granules.length - shown.length) + " more</p>";
       }
     }
+    html += foldable("emit", "EMIT scenes covering this point: " + granules.length, emitBody);
     var swaths = report.eco || [];
-    html += '<p class="section">ECOSTRESS swaths covering this point: ' + swaths.length + "</p>";
+    var ecoBody = "";
     if (swaths.length) {
       var centreE = report.week_sunday ? Date.parse(report.week_sunday + "T00:00:00Z") : null;
       var sortedE = swaths.slice().sort(function (a, b) {
@@ -531,13 +821,41 @@
         return Math.abs(Date.parse(a.start) - centreE) - Math.abs(Date.parse(b.start) - centreE);
       });
       var shownE = sortedE.slice(0, 10);
-      html += '<ul class="emit-list">' + shownE.map(function (s) {
+      ecoBody += '<ul class="emit-list">' + shownE.map(function (s) {
         return '<li><span class="when">' + s.start.slice(0, 10) + " " + s.start.slice(11, 16) + "</span>" +
                "<span>" + (s.daynight || "?").toLowerCase() + "</span></li>";
       }).join("") + "</ul>";
       if (swaths.length > shownE.length) {
-        html += '<p class="note">and ' + (swaths.length - shownE.length) + " more</p>";
+        ecoBody += '<p class="note">and ' + (swaths.length - shownE.length) + " more</p>";
       }
+    }
+    html += foldable("eco", "ECOSTRESS swaths covering this point: " + swaths.length, ecoBody);
+    var hlsBlock = report.hls;
+    if (hlsBlock) {
+      var totalAcq = 0, totalClear = 0;
+      hlsBlock.tiles.forEach(function (t) { totalAcq += t.acq.length; totalClear += t.clear; });
+      var hlsBody = "";
+      if (!hlsBlock.tiles.length) {
+        hlsBody += '<p class="note">No MGRS tile ring covers this point.</p>';
+      }
+      hlsBlock.tiles.forEach(function (t) {
+        hlsBody += '<p class="note">' + t.tile + ": " + t.clear + " clear of " + t.acq.length + "</p>";
+        var shownH = t.acq.slice(0, 20);
+        hlsBody += '<ul class="emit-list">' + shownH.map(function (a) {
+          var clear = a.cloud !== null && a.cloud <= hlsBlock.cloud &&
+                      (hlsBlock.sensor === "ALL" || a.sensor === hlsBlock.sensor);
+          return "<li" + (clear ? ' class="in"' : "") + '><span class="when">' + a.date + "</span>" +
+                 "<span>" + a.sensor + "</span>" +
+                 "<span>" + (a.cloud === null ? "?" : a.cloud + "%") + " cloud</span>" +
+                 (clear ? " <span>✓</span>" : "") + "</li>";
+        }).join("") + "</ul>";
+        if (t.acq.length > shownH.length) {
+          hlsBody += '<p class="note">and ' + (t.acq.length - shownH.length) + " more</p>";
+        }
+      });
+      html += foldable("hls", "HLS acquisitions, " +
+                       (hlsBlock.start ? hlsBlock.start + " to " + hlsBlock.end : "no week selected") +
+                       ": " + totalClear + " clear of " + totalAcq, hlsBody);
     }
     return html;
   }
@@ -550,6 +868,7 @@
     drawPairing();
     syncEmit();
     syncEco();
+    syncHls();
     el("weekOut").textContent = state.week === null ? "no weeks" : "w" + pad(state.week);
   }
 
@@ -657,12 +976,15 @@
     el("emitOnlyWindow").addEventListener("change", function (e) {
       state.emitOnlyWindow = e.target.checked; syncEmit();
     });
-    el("emitWindow").addEventListener("input", function (e) {
-      state.emitWindow = Number(e.target.value);
-      el("emitWindowOut").textContent = e.target.value === "0" ? "off" : e.target.value;
+    el("timeWindow").addEventListener("input", function (e) {
+      state.days = Number(e.target.value);
+      el("timeWindowOut").textContent = e.target.value === "0" ? "off" : e.target.value;
       syncEmit();
+      syncEco();
+      if (state.hls) { drawHlsLegend(); refreshHlsCounts(); }
     });
     el("coincide").addEventListener("change", function (e) { state.coincide = e.target.checked; syncEmit(); });
+    el("coincideAll").addEventListener("change", function (e) { state.coincideAll = e.target.checked; syncEmit(); syncHls(); });
     el("coincideWindow").addEventListener("input", function (e) {
       state.coincideStep = Number(e.target.value);
       el("coincideWindowOut").textContent = stepLabel(state.coincideStep);
@@ -673,24 +995,55 @@
     Array.prototype.forEach.call(document.getElementsByName("ecoDay"), function (radio) {
       radio.addEventListener("change", function (e) { if (e.target.checked) { state.ecoDay = e.target.value; syncEco(); } });
     });
+    el("hls").addEventListener("change", function (e) { state.hls = e.target.checked; syncHls(); });
+    el("hlsCloud").addEventListener("input", function (e) {
+      state.hlsCloud = Number(e.target.value);
+      el("hlsCloudOut").textContent = e.target.value + "%";
+      refreshHlsCounts();
+      if (state.coincideAll) { syncEmit(); }
+    });
+    ["hlsMode", "hlsSensor"].forEach(function (name) {
+      Array.prototype.forEach.call(document.getElementsByName(name), function (radio) {
+        radio.addEventListener("change", function (e) {
+          if (!e.target.checked) { return; }
+          state[name] = e.target.value;
+          drawHlsLegend();
+          refreshHlsCounts();
+          if (state.coincideAll) { syncEmit(); }
+        });
+      });
+    });
     Array.prototype.forEach.call(document.getElementsByName("mode"), function (radio) {
       radio.addEventListener("change", function (e) {
         if (e.target.checked) { state.mode = e.target.value; applyMode(); }
       });
     });
 
+    el("viewerClose").addEventListener("click", closeViewer);
+    el("viewerFit").addEventListener("click", function (e) { e.preventDefault(); viewerFit(); });
+    el("viewer").addEventListener("click", function (e) { if (e.target === el("viewer")) { closeViewer(); } });
+    document.addEventListener("keydown", function (e) { if (e.key === "Escape" && !el("viewer").hidden) { closeViewer(); } });
+
     map.on("click", function (e) {
-      readoutPopup = L.popup({ maxWidth: 320, className: "readout-popup" })
+      // Cap the box at 60% of the map so long lists scroll inside it (Leaflet
+      // adds leaflet-popup-scrolled) instead of running off the map.
+      readoutPopup = L.popup({ maxWidth: 320, maxHeight: Math.round(map.getSize().y * 0.6),
+                               className: "readout-popup" })
         .setLatLng(e.latlng)
         .setContent('<p class="note">Reading…</p>')
         .openOn(map);
+      var range = hlsRange();
       var url = "/api/point?lon=" + e.latlng.lng.toFixed(6) +
                 "&lat=" + e.latlng.lat.toFixed(6) +
                 "&crop=" + state.crop + "&year=" + state.year + "&cdl_year=" + state.cdlYear +
-                (state.week !== null ? "&week=" + state.week : "");
+                (state.week !== null ? "&week=" + state.week : "") +
+                (range ? "&start=" + range.start + "&end=" + range.end : "") +
+                "&cloud=" + state.hlsCloud + "&sensor=" + state.hlsSensor + "&window=" + state.days;
       var popup = readoutPopup;
       fetch(url).then(function (r) { return r.json(); })
-        .then(function (report) { if (popup.isOpen()) { popup.setContent(showReadout(report)); } })
+        .then(function (report) {
+          if (popup.isOpen()) { popup.setContent(showReadout(report)); wireFolds(popup); wireBrowseLinks(popup, report); }
+        })
         .catch(function () { if (popup.isOpen()) { popup.setContent('<p class="note">Read failed.</p>'); } });
     });
 
@@ -705,6 +1058,8 @@
     wire();
     refresh();
     loadStates();
-    drawEmitLegend(); drawEcoLegend(); syncEmit(); syncEco();
+    drawEmitLegend(); drawEcoLegend(); drawHlsLegend(); syncEmit(); syncEco(); syncHls();
+  }).catch(function () {
+    el("pairing").textContent = "Catalog request failed; is the server running? Reload to retry.";
   });
 })();

@@ -16,6 +16,8 @@ EMIT_DATA = DATA / "emit"
 EMIT_FOOTPRINTS = EMIT_DATA / "footprints.geojson"
 ECO_DATA = DATA / "eco"
 ECO_FOOTPRINTS = ECO_DATA / "footprints.geojson"
+HLS_DATA = DATA / "hls"
+HLS_DB = HLS_DATA / "hls.sqlite"
 
 CACHE = ROOT / "cache"
 TILE_CACHE = CACHE / "tiles"

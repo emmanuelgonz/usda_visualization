@@ -19,14 +19,9 @@ _DATA = "/data#"
 
 def entry_to_feature(entry):
     """One CMR granule entry to one GeoJSON feature, or None without a polygon."""
-    polygons = entry.get("polygons")
-    if not polygons or not polygons[0]:
+    ring = cmr.polygon_ring(entry)
+    if ring is None:
         return None
-    numbers = [float(v) for v in polygons[0][0].split()]
-    # CMR lists latitude then longitude; GeoJSON wants longitude then latitude.
-    ring = [[numbers[i + 1], numbers[i]] for i in range(0, len(numbers), 2)]
-    if ring[0] != ring[-1]:
-        ring.append(ring[0])
 
     start = entry.get("time_start")
     cloud = entry.get("cloud_cover")
