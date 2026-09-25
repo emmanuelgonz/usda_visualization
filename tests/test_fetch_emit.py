@@ -60,7 +60,9 @@ class TestFetchAll(unittest.TestCase):
             asked.append(page_num)
             return pages.get(page_num, [])
 
-        entries = fetch_emit.fetch_all(fake)
+        import contextlib, io
+        with contextlib.redirect_stdout(io.StringIO()):
+            entries = fetch_emit.fetch_all(fake)
         self.assertEqual(len(entries), 3)
         self.assertEqual(asked, [1, 2, 3])
 

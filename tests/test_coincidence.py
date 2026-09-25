@@ -1,3 +1,5 @@
+import contextlib
+import io
 import json
 import shutil
 import tempfile
@@ -89,7 +91,8 @@ class TestMain(unittest.TestCase):
                 emit_feature("E1", -93.6, 42.0, "2025-04-22T16:47:42Z")]}))
             paths.ECO_FOOTPRINTS.write_text(json.dumps({"type": "FeatureCollection", "features": [
                 eco_feature("same-pass", -93.0, 42.0, "2025-04-22T16:47:31Z")]}))
-            self.assertEqual(coincidence.main([]), 0)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(coincidence.main([]), 0)
             out = json.loads(paths.EMIT_FOOTPRINTS.read_text())
             self.assertEqual(out["features"][0]["properties"]["eco"][0]["id"], "same-pass")
             self.assertFalse(list(tmp.glob("*.part")))
@@ -105,7 +108,8 @@ class TestMain(unittest.TestCase):
         paths.ECO_FOOTPRINTS = tmp / "absent.geojson"
         try:
             paths.EMIT_FOOTPRINTS.write_text(json.dumps({"type": "FeatureCollection", "features": []}))
-            self.assertEqual(coincidence.main([]), 1)
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(coincidence.main([]), 1)
         finally:
             paths.EMIT_FOOTPRINTS, paths.ECO_FOOTPRINTS = saved
 
