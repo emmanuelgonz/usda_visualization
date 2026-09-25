@@ -146,6 +146,35 @@
   };
   var basinLayers = { 2: null, 4: null };     // {lines, labels} once loaded
   var basinLoading = { 2: false, 4: false };  // a fetch is in flight; toggling again must not start another
+
+  // River network (HydroRIVERS, by Strahler order band) and named rivers (Natural Earth).
+  map.createPane("rivers");
+  map.getPane("rivers").style.zIndex = 457;         // above the footprints, below the basin outlines
+  map.createPane("rivers-named");
+  map.getPane("rivers-named").style.zIndex = 459;   // above the basins, below the state lines; the
+  // pane itself is pointer-transparent (style.css), so only the SVG river strokes are hoverable
+
+  var RIVER_DETAIL_ZOOM = 7;                      // orders 4 and 5 show from this zoom up
+  var RIVERS = {
+    6: { file: "/static/vendor/rivers6.geojson" },
+    4: { file: "/static/vendor/rivers4.geojson" },
+    named: { file: "/static/vendor/rivers_named.geojson" }
+  };
+  var riverLayers = { 6: null, 4: null, named: null };
+  var riverLoading = { 6: false, 4: false, named: false };
+  var riverRenderer = L.canvas({ pane: "rivers" });
+  var riverNamedRenderer = L.svg({ pane: "rivers-named" });
+
+  function riverNetworkStyle(feature) {
+    var ord = feature.properties.ord;
+    var weight = ord >= 6 ? 1.6 : (ord === 5 ? 1.0 : 0.6);
+    return { color: "#3b7dd8", opacity: 0.9, weight: weight };
+  }
+
+  function riverNamedStyle() {
+    return { color: "#1f5fbf", opacity: 0.95, weight: 1.4 };
+  }
+
   var stateLines = null;
   var stateLabels = null;
 
@@ -335,6 +364,47 @@
       if (showLabels && !map.hasLayer(layer.labels)) { layer.labels.addTo(map); }
       if (!showLabels && map.hasLayer(layer.labels)) { map.removeLayer(layer.labels); }
     });
+  }
+
+  function loadRivers(key) {
+    if (riverLoading[key]) { return; }
+    riverLoading[key] = true;
+    var spec = RIVERS[key];
+    fetch(spec.file).then(function (r) { return r.json(); }).then(function (geo) {
+      var layer;
+      if (key === "named") {
+        layer = L.geoJSON(geo, {
+          pane: "rivers-named", renderer: riverNamedRenderer, interactive: true, style: riverNamedStyle,
+          onEachFeature: function (feature, featureLayer) {
+            featureLayer.bindTooltip(feature.properties.name, { sticky: true, direction: "top", className: "river-tooltip" });
+          }
+        });
+      } else {
+        layer = L.geoJSON(geo, { pane: "rivers", renderer: riverRenderer, interactive: false, style: riverNetworkStyle });
+      }
+      riverLayers[key] = layer;
+      riverLoading[key] = false;
+      syncRivers();
+    }).catch(function () { riverLoading[key] = false; /* the rivers are optional; run ./run.sh vendor to add them */ });
+  }
+
+  function syncRivers() {
+    var networkOn = el("rivers").checked;
+    var detailWanted = map.getZoom() >= RIVER_DETAIL_ZOOM;
+    [6, 4].forEach(function (key) {
+      var on = networkOn && (key === 6 || detailWanted);
+      var layer = riverLayers[key];
+      if (on && !layer) { loadRivers(key); return; }
+      if (!layer) { return; }
+      if (on && !map.hasLayer(layer)) { layer.addTo(map); }
+      if (!on && map.hasLayer(layer)) { map.removeLayer(layer); }
+    });
+    var namedOn = el("riversNamed").checked;
+    var named = riverLayers.named;
+    if (namedOn && !named) { loadRivers("named"); return; }
+    if (!named) { return; }
+    if (namedOn && !map.hasLayer(named)) { named.addTo(map); }
+    if (!namedOn && map.hasLayer(named)) { map.removeLayer(named); }
   }
 
   function syncStates() {
@@ -1030,6 +1100,9 @@
     el("basins2").addEventListener("change", syncBasins);
     el("basins4").addEventListener("change", syncBasins);
     map.on("zoomend", syncBasins);
+    el("rivers").addEventListener("change", syncRivers);
+    el("riversNamed").addEventListener("change", syncRivers);
+    map.on("zoomend", syncRivers);
     el("emit").addEventListener("change", function (e) { state.emit = e.target.checked; syncEmit(); });
     el("emitCloud").addEventListener("input", function (e) {
       state.emitCloud = Number(e.target.value); el("emitCloudOut").textContent = e.target.value + "%"; syncEmit();
