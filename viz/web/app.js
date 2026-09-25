@@ -134,6 +134,18 @@
 
   // State names are shown below this zoom; above it one state fills the view.
   var LABEL_MAX_ZOOM = 9;
+
+  // Hydrologic units (USGS HUC2 regions and HUC4 subregions), outlines plus names.
+  map.createPane("basins");
+  map.getPane("basins").style.zIndex = 458;   // above the footprints, below the state lines
+  var BASINS = {
+    2: { file: "/static/vendor/basins2.geojson", style: { color: "#1f4e79", weight: 2.2, opacity: 0.85, fill: false },
+         labelClass: "basin-label", labelZoom: [3, 9] },
+    4: { file: "/static/vendor/basins4.geojson", style: { color: "#2e75b6", weight: 1, opacity: 0.7, fill: false, dashArray: "6 3" },
+         labelClass: "basin-label sub", labelZoom: [6, 11] }
+  };
+  var basinLayers = { 2: null, 4: null };     // {lines, labels} once loaded
+  var basinLoading = { 2: false, 4: false };  // a fetch is in flight; toggling again must not start another
   var stateLines = null;
   var stateLabels = null;
 
@@ -288,6 +300,41 @@
       });
       syncStates();
     }).catch(function () { /* boundaries are optional; the map works without them */ });
+  }
+
+  function loadBasins(level) {
+    if (basinLoading[level]) { return; }
+    basinLoading[level] = true;
+    var spec = BASINS[level];
+    fetch(spec.file).then(function (r) { return r.json(); }).then(function (geo) {
+      var lines = L.geoJSON(geo, { pane: "basins", interactive: false, style: spec.style });
+      var labels = L.layerGroup();
+      geo.features.forEach(function (f) {
+        var p = f.properties;
+        labels.addLayer(L.marker([Number(p.label_lat), Number(p.label_lon)], {
+          pane: "basins", interactive: false, keyboard: false,
+          icon: L.divIcon({ className: spec.labelClass, html: p.name, iconSize: [0, 0] })
+        }));
+      });
+      basinLayers[level] = { lines: lines, labels: labels };
+      basinLoading[level] = false;
+      syncBasins();
+    }).catch(function () { basinLoading[level] = false; /* the outlines are optional; run ./run.sh vendor to add them */ });
+  }
+
+  function syncBasins() {
+    [2, 4].forEach(function (level) {
+      var on = el("basins" + level).checked;
+      var layer = basinLayers[level];
+      if (on && !layer) { loadBasins(level); return; }
+      if (!layer) { return; }
+      var zoom = map.getZoom();
+      var showLabels = on && zoom >= BASINS[level].labelZoom[0] && zoom < BASINS[level].labelZoom[1];
+      if (on && !map.hasLayer(layer.lines)) { layer.lines.addTo(map); }
+      if (!on && map.hasLayer(layer.lines)) { map.removeLayer(layer.lines); }
+      if (showLabels && !map.hasLayer(layer.labels)) { layer.labels.addTo(map); }
+      if (!showLabels && map.hasLayer(layer.labels)) { map.removeLayer(layer.labels); }
+    });
   }
 
   function syncStates() {
@@ -787,6 +834,13 @@
       "<tr><th>&nbsp;&nbsp;double-crop</th><td>" + pct(cover.double) + "</td></tr>" +
       "</table>";
 
+    if (report.basins) {
+      var units = [];
+      if (report.basins.huc2) { units.push(report.basins.huc2.name + " (HUC " + report.basins.huc2.huc + ")"); }
+      if (report.basins.huc4) { units.push(report.basins.huc4.name + " (HUC " + report.basins.huc4.huc + ")"); }
+      html += '<p class="basin">Basin: ' + (units.length ? units.join(" · ") : "outside the mapped units") + "</p>";
+    }
+
     if (!hasSeries) {
       html += '<p class="note">No CPC data at this cell.</p>';
     } else {
@@ -973,6 +1027,9 @@
     });
     el("states").addEventListener("change", syncStates);
     map.on("zoomend", syncStates);
+    el("basins2").addEventListener("change", syncBasins);
+    el("basins4").addEventListener("change", syncBasins);
+    map.on("zoomend", syncBasins);
     el("emit").addEventListener("change", function (e) { state.emit = e.target.checked; syncEmit(); });
     el("emitCloud").addEventListener("input", function (e) {
       state.emitCloud = Number(e.target.value); el("emitCloudOut").textContent = e.target.value + "%"; syncEmit();

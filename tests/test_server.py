@@ -629,6 +629,24 @@ class TestBasins(ServerTestCase):
 
 
 class TestInterfaceAssets(ServerTestCase):
+    def test_basin_layers_and_readout_line(self):
+        _, _, index = self.get("/")
+        html = index.decode()
+        self.assertIn('id="basins2"', html)
+        self.assertIn('id="basins4"', html)
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        self.assertIn("/static/vendor/basins2.geojson", text)
+        self.assertIn("/static/vendor/basins4.geojson", text)
+        self.assertIn('map.createPane("basins")', text)
+        self.assertIn("basinLoading[level]", text)                # one fetch per level, however fast the box is toggled
+        self.assertIn("458", text[text.index('map.getPane("basins")'):text.index('map.getPane("basins")') + 80])
+        self.assertIn("interactive: false", text[text.index("function loadBasins"):text.index("function syncBasins")])
+        self.assertIn("outside the mapped units", text)
+        self.assertIn("(HUC ", text)
+        _, _, css = self.get("/static/style.css")
+        self.assertIn(".basin-label", css.decode())
+
     def test_ecostress_plus_hls_coincidence_mark(self):
         _, _, index = self.get("/")
         html = index.decode()

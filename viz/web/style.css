@@ -168,3 +168,13 @@ label .note { font-weight: 450; }
 #viewerClose { position: absolute; top: 4px; right: 6px; border: 0; background: transparent; font: 20px/1 system-ui;
                color: var(--muted); cursor: pointer; }
 #viewerClose:hover { color: var(--panel-fg); }
+
+/* Hydrologic-unit outlines and names, drawn above the states in their own pane. */
+.leaflet-basins-pane { pointer-events: none; }
+.basin-label {
+  font: 650 12px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: #1f4e79; white-space: nowrap; transform: translate(-50%, -50%);
+  text-shadow: 0 0 3px #fff, 0 0 3px #fff, 0 0 3px #fff, 0 0 3px #fff; letter-spacing: 0.02em;
+}
+.basin-label.sub { font-weight: 550; font-size: 10px; color: #2e75b6; }
+.readout-popup .basin { margin: 0 0 6px; color: var(--muted); }
