@@ -138,13 +138,16 @@ def hls_read(work=None):
     validates parameters. value is None when the store is absent or locked, and
     busy tells those apart: a fetch committing a month holds the write lock, so
     the read-only connection gives up after half a second and raises hls.BUSY.
+    Any other OperationalError is a genuine fault and propagates to the 500 handler.
     """
     try:
         entry = hls.store_for(paths.HLS_DB)
         if entry is None:
             return None, False
         return (entry if work is None else work(entry)), False
-    except hls.BUSY:
+    except hls.BUSY as exc:
+        if "locked" not in str(exc) and "busy" not in str(exc):
+            raise                  # a genuine query fault is a 500, not "fetch in progress"
         return None, True
 
 
@@ -330,12 +333,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(paths.ECO_FOOTPRINTS.read_bytes(), CONTENT_TYPES[".geojson"])
 
             if route == "/api/hls/tiles.geojson":
-                geo, busy = hls_read(lambda entry: entry[0].tiles_geojson())
+                geo, busy = hls_read(lambda entry: entry[0].tiles_geojson_bytes())
                 if busy:
                     return self._fail(HTTPStatus.SERVICE_UNAVAILABLE, HLS_BUSY)
                 if geo is None:
                     return self._fail(HTTPStatus.NOT_FOUND, "no HLS store; run ./run.sh hls")
-                return self._send(json.dumps(geo).encode(), CONTENT_TYPES[".geojson"])
+                return self._send(geo, CONTENT_TYPES[".geojson"])
 
             if route == "/api/hls/counts":
                 return self._handle_hls_counts(query)
@@ -393,14 +396,22 @@ class Handler(BaseHTTPRequestHandler):
     def _hls_params(self, query, required):
         """Validated HLS parameters, or (None, message). Missing optional ones take defaults."""
         params = {}
-        for key in ("start", "end"):
-            if key in query:
-                value = query[key][0]
-                if not DATE_RE.match(value):
-                    return None, f"{key} must be YYYY-MM-DD"
-                params[key] = value
-            elif required:
-                return None, "required: start, end"
+        given = [key for key in ("start", "end") if key in query]
+        if required and len(given) < 2:
+            return None, "required: start, end"
+        if len(given) == 1:
+            return None, "start and end go together"
+        for key in given:
+            value = query[key][0]
+            if not DATE_RE.match(value):
+                return None, f"{key} must be YYYY-MM-DD"
+            try:
+                datetime.date.fromisoformat(value)
+            except ValueError:
+                return None, f"{key} is not a calendar date"
+            params[key] = value
+        if given and params["start"] > params["end"]:
+            return None, "start must not be after end"
         try:
             params["cloud"] = int(query["cloud"][0]) if "cloud" in query else 30
             params["window"] = int(query["window"][0]) if "window" in query else 7
