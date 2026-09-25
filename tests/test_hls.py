@@ -1,3 +1,4 @@
+import json
 import shutil
 import tempfile
 import unittest
@@ -44,6 +45,11 @@ class TestMonths(unittest.TestCase):
         self.assertFalse(hls.is_frozen("2025-07", "2025-09-29T12:00:00+00:00"))
         self.assertTrue(hls.is_frozen("2025-07", "2025-09-30T00:00:00+00:00"))
         self.assertTrue(hls.is_frozen("2025-07", "2025-10-01T00:00:00+00:00"))
+
+    def test_frozen_compares_calendar_days_in_utc(self):
+        # 2025-09-29 20:00 at UTC-8 is 2025-09-30 04:00 UTC: 60 days after 2025-08-01, frozen.
+        self.assertTrue(hls.is_frozen("2025-07", "2025-09-29T20:00:00-08:00"))
+        self.assertFalse(hls.is_frozen("2025-07", "2025-09-29T20:00:00+00:00"))
 
     def test_frozen_accepts_z_suffix(self):
         self.assertTrue(hls.is_frozen("2025-07", "2025-12-01T00:00:00Z"))
@@ -108,6 +114,7 @@ class TestStoreWrites(StoreTestCase):
         # cloud, sensor and time. Both must be answered from the index alone.
         names = {r[0] for r in self.store.conn.execute("SELECT name FROM sqlite_master WHERE type='index'")}
         self.assertEqual(names, {"acq_date", "acq_date_cloud_tile", "acq_tile_date_cover",
+                                 "acq_sensor_date_cloud_tile",
                                  "sqlite_autoindex_acq_1", "sqlite_autoindex_months_1",
                                  "sqlite_autoindex_tiles_1"})
 
@@ -224,6 +231,31 @@ class TestTileIndex(StoreTestCase):
         finally:
             blocker.rollback()
         self.assertEqual(hls.store_for(self.store.path)[1].covering(-93.5, 42.5), ["T15TVH"])
+
+    def test_store_for_closes_the_store_when_the_index_build_fails(self):
+        import os, time
+        from unittest import mock
+        closed = []
+        real_close = hls.Store.close
+
+        def closing(store):
+            closed.append(store.path)
+            real_close(store)
+
+        hls.store_for(self.tmp / "nope.sqlite")          # drops any store cached by an earlier test
+        os.utime(self.store.path, ns=(time.time_ns() + 10 ** 9, time.time_ns() + 10 ** 9))
+        with mock.patch.object(hls.Store, "close", closing), \
+             mock.patch.object(hls, "TileIndex", side_effect=hls.BUSY("database is locked")):
+            with self.assertRaises(hls.BUSY):
+                hls.store_for(self.store.path)
+        self.assertEqual(closed, [self.store.path])
+        self.assertIsNone(getattr(hls._local, "entry", None))
+
+    def test_tiles_geojson_bytes_is_serialised_once(self):
+        self.store.put_tile("T15TVH", SQUARE)
+        first = self.store.tiles_geojson_bytes()
+        self.assertIs(self.store.tiles_geojson_bytes(), first)
+        self.assertEqual(json.loads(first)["features"][0]["properties"], {"tile": "T15TVH"})
 
     def test_store_for_returns_none_when_absent_and_reopens_on_change(self):
         self.assertIsNone(hls.store_for(self.tmp / "nope.sqlite"))

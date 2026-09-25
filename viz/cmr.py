@@ -4,6 +4,7 @@ Used by the EMIT, ECOSTRESS, and HLS fetch scripts. These are the project's
 only network steps; the interface never touches the network.
 """
 
+import http.client
 import json
 import os
 import sys
@@ -29,30 +30,31 @@ def page_url(short_name, page_num, version=None, temporal=None):
     return CMR_URL + "?" + "&".join(parts)
 
 
-def fetch_page(url):
-    """Entries from one CMR page. Retries transient failures three times."""
+def _retrying(url, read):
+    """read(response) for one URL, retried three times on transient failures.
+
+    Covers connection errors, HTTP errors, a body cut short (IncompleteRead is
+    an HTTPException, not an OSError), and a malformed page.
+    """
     for attempt in range(3):
         try:
             with urllib.request.urlopen(url, timeout=120) as response:
-                return json.load(response)["feed"]["entry"]
-        except (OSError, ValueError, KeyError) as exc:
+                return read(response)
+        except (OSError, http.client.HTTPException, ValueError, KeyError) as exc:
             if attempt == 2:
                 raise
             print(f"{url[-40:]}: {exc}; retrying", file=sys.stderr)
             time.sleep(2 * (attempt + 1))
+
+
+def fetch_page(url):
+    """Entries from one CMR page. Retries transient failures three times."""
+    return _retrying(url, lambda response: json.load(response)["feed"]["entry"])
 
 
 def fetch_response(url):
     """(body bytes, response headers) from one URL. Retries transient failures three times."""
-    for attempt in range(3):
-        try:
-            with urllib.request.urlopen(url, timeout=120) as response:
-                return response.read(), response.headers
-        except OSError as exc:
-            if attempt == 2:
-                raise
-            print(f"{url[-40:]}: {exc}; retrying", file=sys.stderr)
-            time.sleep(2 * (attempt + 1))
+    return _retrying(url, lambda response: (response.read(), response.headers))
 
 
 def polygon_ring(entry):

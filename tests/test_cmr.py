@@ -108,10 +108,40 @@ class TestFetchResponse(unittest.TestCase):
                 raise OSError("boom")
             return Response(b"a,b\n1,2\n")
 
-        with mock.patch("urllib.request.urlopen", fake_urlopen), mock.patch("time.sleep"):
+        import contextlib
+        with mock.patch("urllib.request.urlopen", fake_urlopen), mock.patch("time.sleep"), \
+             contextlib.redirect_stderr(io.StringIO()):
             body, headers = cmr.fetch_response("http://x")
         self.assertEqual(body, b"a,b\n1,2\n")
         self.assertEqual(headers.get("CMR-Hits"), "9675")
+        self.assertEqual(len(calls), 2)
+
+    def test_retries_a_body_cut_short(self):
+        import contextlib
+        import http.client
+        import io
+        from unittest import mock
+
+        class Response(io.BytesIO):
+            headers = {}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        calls = []
+
+        def fake_urlopen(url, timeout):
+            calls.append(url)
+            if len(calls) == 1:
+                raise http.client.IncompleteRead(b"partial")
+            return Response(b'{"feed": {"entry": [1]}}')
+
+        with mock.patch("urllib.request.urlopen", fake_urlopen), mock.patch("time.sleep"), \
+             contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(cmr.fetch_page("http://x"), [1])
         self.assertEqual(len(calls), 2)
 
     def test_gives_up_after_three_failures(self):
@@ -120,7 +150,10 @@ class TestFetchResponse(unittest.TestCase):
         def fake_urlopen(url, timeout):
             raise OSError("boom")
 
-        with mock.patch("urllib.request.urlopen", fake_urlopen), mock.patch("time.sleep"):
+        import contextlib
+        import io
+        with mock.patch("urllib.request.urlopen", fake_urlopen), mock.patch("time.sleep"), \
+             contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaises(OSError):
                 cmr.fetch_response("http://x")
 

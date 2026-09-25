@@ -449,7 +449,13 @@
 
   function fetchHlsCounts() {
     var range = hlsRange();
-    if (!hlsLayer || !state.hls || !range) { return; }
+    if (!hlsLayer || !state.hls) { return; }
+    if (!range) {                      // no CPC weeks for this selection: nothing to count, clear stale colours
+      hlsRequest += 1;
+      hlsCounts = {};
+      applyHlsCounts();
+      return;
+    }
     var seq = ++hlsRequest;
     fetch("/api/hls/counts?start=" + range.start + "&end=" + range.end +
           "&cloud=" + state.hlsCloud + "&sensor=" + state.hlsSensor)
@@ -751,6 +757,16 @@
     });
   }
 
+  // One truncated list for the readout: up to `limit` rows, then "and N more".
+  function renderList(items, limit, rowHtml) {
+    var shown = items.slice(0, limit);
+    var html = '<ul class="emit-list">' + shown.map(rowHtml).join("") + "</ul>";
+    if (items.length > shown.length) {
+      html += '<p class="note">and ' + (items.length - shown.length) + " more</p>";
+    }
+    return html;
+  }
+
   function showReadout(report) {
     var cover = report.cover || {};
     var noCover = (cover.primary === null || cover.primary === undefined) &&
@@ -791,8 +807,7 @@
         if (centre === null) { return Date.parse(b.start) - Date.parse(a.start); }
         return Math.abs(Date.parse(a.start) - centre) - Math.abs(Date.parse(b.start) - centre);
       });
-      var shown = sorted.slice(0, 15);
-      emitBody += '<ul class="emit-list">' + shown.map(function (g) {
+      emitBody += renderList(sorted, 15, function (g) {
         var t = Date.parse(g.start);
         var inWin = bounds && t >= bounds[0] && t <= bounds[1];
         return "<li" + (inWin ? ' class="in"' : "") + '><span class="when">' + g.start.slice(0, 10) + "</span>" +
@@ -800,16 +815,13 @@
                (g.browse ? ' <a href="' + g.browse + '" class="browse-scene" data-id="' + g.id + '">browse</a>' : "") +
                (g.data ? ' <a href="' + g.data + '" target="_blank" rel="noopener">data</a>' : "") +
                (g.eco && g.eco.length && state.coincide && Math.abs(g.eco[0].dt) <= coincideSeconds()
-                 ? ' <span class="eco-tag">ECOSTRESS ' + formatDt(g.eco[0].dt) + "</span>" : "") +
+                 ? ' <span class="tag">ECOSTRESS ' + formatDt(g.eco[0].dt) + "</span>" : "") +
                (g.hls
-                 ? ' <span class="eco-tag">HLS ' + g.hls.sensor + " " + formatDays(g.hls.dt) + ", " +
-                   (g.hls.cloud === null ? "?" : g.hls.cloud) + "% cloud</span>"
-                 : (g.hls === null ? ' <span class="eco-tag">no clear HLS within ±' + report.hls.window + " d</span>" : "")) +
+                 ? ' <span class="tag">HLS ' + g.hls.sensor + " " + formatDays(g.hls.dt) + ", " +
+                   (g.hls.cloud === null ? "?" : g.hls.cloud.toFixed(0)) + "% cloud</span>"
+                 : (g.hls === null ? ' <span class="tag">no clear HLS within ±' + report.hls.window + " d</span>" : "")) +
                (inWin ? " <span>★</span>" : "") + "</li>";
-      }).join("") + "</ul>";
-      if (granules.length > shown.length) {
-        emitBody += '<p class="note">and ' + (granules.length - shown.length) + " more</p>";
-      }
+      });
     }
     html += foldable("emit", "EMIT scenes covering this point: " + granules.length, emitBody);
     var swaths = report.eco || [];
@@ -820,14 +832,10 @@
         if (centreE === null) { return Date.parse(b.start) - Date.parse(a.start); }
         return Math.abs(Date.parse(a.start) - centreE) - Math.abs(Date.parse(b.start) - centreE);
       });
-      var shownE = sortedE.slice(0, 10);
-      ecoBody += '<ul class="emit-list">' + shownE.map(function (s) {
+      ecoBody += renderList(sortedE, 10, function (s) {
         return '<li><span class="when">' + s.start.slice(0, 10) + " " + s.start.slice(11, 16) + "</span>" +
                "<span>" + (s.daynight || "?").toLowerCase() + "</span></li>";
-      }).join("") + "</ul>";
-      if (swaths.length > shownE.length) {
-        ecoBody += '<p class="note">and ' + (swaths.length - shownE.length) + " more</p>";
-      }
+      });
     }
     html += foldable("eco", "ECOSTRESS swaths covering this point: " + swaths.length, ecoBody);
     var hlsBlock = report.hls;
@@ -840,18 +848,14 @@
       }
       hlsBlock.tiles.forEach(function (t) {
         hlsBody += '<p class="note">' + t.tile + ": " + t.clear + " clear of " + t.acq.length + "</p>";
-        var shownH = t.acq.slice(0, 20);
-        hlsBody += '<ul class="emit-list">' + shownH.map(function (a) {
+        hlsBody += renderList(t.acq, 20, function (a) {
           var clear = a.cloud !== null && a.cloud <= hlsBlock.cloud &&
                       (hlsBlock.sensor === "ALL" || a.sensor === hlsBlock.sensor);
           return "<li" + (clear ? ' class="in"' : "") + '><span class="when">' + a.date + "</span>" +
                  "<span>" + a.sensor + "</span>" +
-                 "<span>" + (a.cloud === null ? "?" : a.cloud + "%") + " cloud</span>" +
+                 "<span>" + (a.cloud === null ? "?" : a.cloud.toFixed(0) + "%") + " cloud</span>" +
                  (clear ? " <span>✓</span>" : "") + "</li>";
-        }).join("") + "</ul>";
-        if (t.acq.length > shownH.length) {
-          hlsBody += '<p class="note">and ' + (t.acq.length - shownH.length) + " more</p>";
-        }
+        });
       });
       html += foldable("hls", "HLS acquisitions, " +
                        (hlsBlock.start ? hlsBlock.start + " to " + hlsBlock.end : "no week selected") +
@@ -981,7 +985,8 @@
       el("timeWindowOut").textContent = e.target.value === "0" ? "off" : e.target.value;
       syncEmit();
       syncEco();
-      if (state.hls) { drawHlsLegend(); refreshHlsCounts(); }
+      // Season mode ignores the window, so only week mode refetches the counts.
+      if (state.hls && state.hlsMode === "week") { drawHlsLegend(); refreshHlsCounts(); }
     });
     el("coincide").addEventListener("change", function (e) { state.coincide = e.target.checked; syncEmit(); });
     el("coincideAll").addEventListener("change", function (e) { state.coincideAll = e.target.checked; syncEmit(); syncHls(); });

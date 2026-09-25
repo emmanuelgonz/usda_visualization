@@ -97,10 +97,16 @@ def parse_ur(granule_ur):
     return (match.group(1), match.group(2)) if match else None
 
 
+def _split_month(month):
+    """(year, month) from 'YYYY-MM'."""
+    year, mon = month.split("-")
+    return int(year), int(mon)
+
+
 def months_between(first, last):
     """Every 'YYYY-MM' from first to last inclusive."""
-    year, month = (int(v) for v in first.split("-"))
-    last_year, last_month = (int(v) for v in last.split("-"))
+    year, month = _split_month(first)
+    last_year, last_month = _split_month(last)
     out = []
     while (year, month) <= (last_year, last_month):
         out.append(f"{year:04d}-{month:02d}")
@@ -112,7 +118,7 @@ def months_between(first, last):
 
 def month_bounds(month):
     """(first day of the month, first day of the next month) as ISO dates."""
-    year, mon = (int(v) for v in month.split("-"))
+    year, mon = _split_month(month)
     start = datetime.date(year, mon, 1)
     end = datetime.date(year + 1, 1, 1) if mon == 12 else datetime.date(year, mon + 1, 1)
     return start.isoformat(), end.isoformat()
@@ -122,8 +128,10 @@ def is_frozen(month, fetched_at, days=FROZEN_AFTER_DAYS):
     """True when the month was fetched at least `days` after it ended."""
     _, end = month_bounds(month)
     end_date = datetime.date.fromisoformat(end)
-    fetched = datetime.datetime.fromisoformat(fetched_at.replace("Z", "+00:00")).date()
-    return (fetched - end_date).days >= days
+    stamp = datetime.datetime.fromisoformat(fetched_at.replace("Z", "+00:00"))
+    if stamp.tzinfo is not None:
+        stamp = stamp.astimezone(datetime.timezone.utc)      # compare calendar days in UTC
+    return (stamp.date() - end_date).days >= days
 
 
 def parse_csv(text):
@@ -161,6 +169,7 @@ CREATE TABLE IF NOT EXISTS acq (
 CREATE INDEX IF NOT EXISTS acq_date ON acq(date);
 CREATE INDEX IF NOT EXISTS acq_date_cloud_tile ON acq(date, cloud, tile);
 CREATE INDEX IF NOT EXISTS acq_tile_date_cover ON acq(tile, date, cloud, sensor, time);
+CREATE INDEX IF NOT EXISTS acq_sensor_date_cloud_tile ON acq(sensor, date, cloud, tile);
 DROP INDEX IF EXISTS acq_tile_date;
 CREATE TABLE IF NOT EXISTS tiles (
   tile TEXT PRIMARY KEY,
@@ -254,6 +263,13 @@ class Store:
                "AND date BETWEEN ? AND ? ORDER BY time, tile")
         return [dict(r) for r in self.conn.execute(sql, [*tiles, start, end])]
 
+    def tiles_geojson_bytes(self):
+        """The tiles FeatureCollection as JSON bytes, serialised once per Store (one per file version)."""
+        cached = getattr(self, "_tiles_bytes", None)
+        if cached is None:
+            cached = self._tiles_bytes = json.dumps(self.tiles_geojson()).encode()
+        return cached
+
     def tiles_geojson(self):
         features = [{
             "type": "Feature",
@@ -314,7 +330,11 @@ def store_for(path):
         return cached[1]
     _drop_cached()
     store = Store(path, read_only=True)
-    entry = (store, TileIndex(store))
+    try:
+        entry = (store, TileIndex(store))
+    except Exception:
+        store.close()          # the index build hit the lock; do not leak the connection
+        raise
     _local.entry = (key, entry)
     return entry
 

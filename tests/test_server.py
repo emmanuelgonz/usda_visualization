@@ -427,7 +427,9 @@ class TestHlsRoutes(ServerTestCase):
         for query in ("start=2025-07-15&end=2025-07-31&cloud=30&sensor=X30",
                       "start=2025-7-15&end=2025-07-31&cloud=30&sensor=ALL",
                       "start=2025-07-15&end=2025-07-31&cloud=abc&sensor=ALL",
-                      "end=2025-07-31&cloud=30&sensor=ALL"):
+                      "end=2025-07-31&cloud=30&sensor=ALL",
+                      "start=2025-13-40&end=2025-07-31&cloud=30&sensor=ALL",      # not a calendar date
+                      "start=2025-08-01&end=2025-07-01&cloud=30&sensor=ALL"):     # reversed range
             with self.assertRaises(urllib.error.HTTPError) as ctx:
                 self.get("/api/hls/counts?" + query)
             self.assertEqual(ctx.exception.code, 400, query)
@@ -461,6 +463,32 @@ class TestHlsRoutes(ServerTestCase):
         report = json.loads(self.get(self.point_url() + "&start=2025-07-15&end=2025-07-31&cloud=30&sensor=L30&window=7")[2])
         self.assertIsNone({g["id"]: g for g in report["emit"]}["near-new"]["hls"])
         self.assertEqual(report["hls"]["tiles"][0]["clear"], 0)
+
+    def test_point_rejects_a_lone_start_or_end(self):
+        for query in ("&start=2025-07-15", "&end=2025-07-31"):
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                self.get(self.point_url() + query)
+            self.assertEqual(ctx.exception.code, 400)
+            self.assertIn("go together", ctx.exception.read().decode())
+
+    def test_point_rejects_bad_and_reversed_dates_like_the_counts_route(self):
+        for query, message in (("&start=2025-13-40&end=2025-07-31", "calendar"),
+                               ("&start=2025-08-01&end=2025-07-01", "after end")):
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                self.get(self.point_url() + query)
+            self.assertEqual(ctx.exception.code, 400)
+            self.assertIn(message, ctx.exception.read().decode())
+        report = json.loads(self.get(self.point_url() + "&start=2025-07-20&end=2025-07-20&cloud=30&sensor=ALL&window=7")[2])
+        self.assertEqual((report["hls"]["start"], report["hls"]["end"]), ("2025-07-20", "2025-07-20"))   # start == end is valid
+
+    def test_a_query_fault_is_a_500_not_busy(self):
+        import sqlite3
+        from unittest import mock
+        with mock.patch.object(tileserver.hls, "store_for", side_effect=sqlite3.OperationalError("no such column: nope")):
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                self.get("/api/hls/counts?start=2025-07-15&end=2025-07-31&cloud=30&sensor=ALL")
+            self.assertEqual(ctx.exception.code, 500)
+            self.assertIn("no such column", ctx.exception.read().decode())
 
     def test_point_defaults_the_range_to_the_week_window(self):
         # 2024 week 30 ends Sunday 2024-07-28; ±7 days is 07-21 to 08-04.
@@ -899,6 +927,20 @@ class TestInterfaceAssets(ServerTestCase):
         _, _, css = self.get("/static/style.css")
         self.assertIn("#viewer[hidden]", css.decode())
 
+    def test_readout_uses_one_list_renderer_and_neutral_tags(self):
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        self.assertIn("function renderList(items, limit, rowHtml)", text)
+        self.assertEqual(text.count("renderList("), 4)          # definition plus the three lists
+        self.assertNotIn("eco-tag", text)
+        self.assertIn('class="tag"', text)
+        self.assertIn("g.hls.cloud.toFixed(0)", text)
+        self.assertIn('state.hls && state.hlsMode === "week"', text)
+        self.assertIn("no CPC weeks for this selection: nothing to count", text)
+        _, _, css = self.get("/static/style.css")
+        self.assertIn(".emit-list .tag", css.decode())
+        self.assertNotIn("eco-tag", css.decode())
+
     def test_readout_lists_are_collapsible_and_remembered(self):
         _, _, app = self.get("/static/app.js")
         text = app.decode()
@@ -927,7 +969,7 @@ class TestInterfaceAssets(ServerTestCase):
         self.assertIn("no clear HLS within", text)
         self.assertIn("&start=", text)
         self.assertIn("&window=", text)
-        self.assertIn("slice(0, 20)", text)
+        self.assertIn("renderList(t.acq, 20", text)
         if not shutil.which("node"):
             self.skipTest("node not available")
         match = re.search(r"function formatDays\(dt\) \{.*?\n  \}", text, re.S)
