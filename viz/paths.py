@@ -23,3 +23,5 @@ CACHE = ROOT / "cache"
 TILE_CACHE = CACHE / "tiles"
 
 WEB = ROOT / "viz" / "web"
+BASINS2 = WEB / "vendor" / "basins2.geojson"
+BASINS4 = WEB / "vendor" / "basins4.geojson"
