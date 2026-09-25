@@ -998,6 +998,25 @@ class TestInterfaceAssets(ServerTestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "same day|−2 d|+3 d|+1 d")
 
+    def test_scene_overlay_controls_and_layer(self):
+        _, _, index = self.get("/")
+        html = index.decode()
+        for ident in ('id="sceneRow"', 'id="sceneName"', 'id="sceneRemove"', 'id="sceneOpacity"', 'id="sceneOpacityOut"'):
+            self.assertIn(ident, html)
+        self.assertIn("Scene on map", html)
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        self.assertIn('map.createPane("scene")', text)
+        self.assertIn("453", text[text.index('map.getPane("scene")'):text.index('map.getPane("scene")') + 80])
+        self.assertIn('"/tiles/emit/" + ', text)
+        self.assertIn("maxNativeZoom: 13", text[text.index("function showScene"):text.index("function clearScene")])
+        show = text[text.index("function showScene"):text.index("function clearScene")]
+        self.assertIn("clearScene()", show)                      # one scene at a time
+        self.assertIn("map.fitBounds", show)
+        self.assertIn("g.orientable", text)
+        self.assertIn('class="show-scene"', text)
+        self.assertIn("wireSceneLinks(popup, report)", text)
+
 
 if __name__ == "__main__":
     unittest.main()
