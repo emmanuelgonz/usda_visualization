@@ -682,19 +682,44 @@
   // Leaflet 1.9.4's update() are called directly instead.
   // The EMIT browse image is a picture in the sensor's own grid with no
   // coordinates, so it is shown over the map rather than placed on it.
+  // A second Leaflet map in pixel space (CRS.Simple) shows the quicklook with
+  // wheel and pinch zoom, drag panning, and the usual controls. Zoom 0 is one
+  // screen pixel per image pixel; VIEWER_MAX_ZOOM caps magnification at 8x.
+  var VIEWER_MAX_ZOOM = 3;
+  var viewerMap = null;
+  var viewerImage = null;
+  var viewerBounds = null;
+
+  function viewerFit() {
+    if (viewerMap && viewerBounds) { viewerMap.fitBounds(viewerBounds); }
+  }
+
   function openViewer(g) {
-    el("viewerImg").src = g.browse;
     el("viewerMeta").innerHTML =
       (g.start || "").slice(0, 10) + " · " + g.id + " · " +
       (g.cloud === null || g.cloud === undefined ? "?" : g.cloud.toFixed(0) + "%") + " cloud" +
       (g.data ? ' · <a href="' + g.data + '" target="_blank" rel="noopener">data</a>' : "") +
       ' · <a href="' + g.browse + '" target="_blank" rel="noopener">open in a new tab</a>';
     el("viewer").hidden = false;
+    if (!viewerMap) {
+      viewerMap = L.map("viewerMap", { crs: L.CRS.Simple, minZoom: -5, maxZoom: VIEWER_MAX_ZOOM,
+                                       zoomSnap: 0.25, attributionControl: false });
+    }
+    if (viewerImage) { viewerMap.removeLayer(viewerImage); viewerImage = null; }
+    var probe = new Image();
+    probe.onload = function () {
+      // CRS.Simple takes [y, x]; the image spans its pixel size, so zoom 0 is 1:1.
+      viewerBounds = L.latLngBounds([[0, 0], [probe.naturalHeight, probe.naturalWidth]]);
+      viewerImage = L.imageOverlay(g.browse, viewerBounds).addTo(viewerMap);
+      viewerMap.setMaxBounds(viewerBounds.pad(0.5));
+      viewerMap.invalidateSize();
+      viewerFit();
+    };
+    probe.src = g.browse;
   }
 
   function closeViewer() {
     el("viewer").hidden = true;
-    el("viewerImg").removeAttribute("src");
   }
 
   // "browse" links inside an open popup open the viewer; the href stays for right-click.
@@ -995,6 +1020,7 @@
     });
 
     el("viewerClose").addEventListener("click", closeViewer);
+    el("viewerFit").addEventListener("click", function (e) { e.preventDefault(); viewerFit(); });
     el("viewer").addEventListener("click", function (e) { if (e.target === el("viewer")) { closeViewer(); } });
     document.addEventListener("keydown", function (e) { if (e.key === "Escape" && !el("viewer").hidden) { closeViewer(); } });
 

@@ -879,7 +879,7 @@ class TestInterfaceAssets(ServerTestCase):
     def test_emit_browse_opens_an_in_page_viewer(self):
         _, _, index = self.get("/")
         html = index.decode()
-        for ident in ('id="viewer"', 'id="viewerImg"', 'id="viewerMeta"', 'id="viewerClose"'):
+        for ident in ('id="viewer"', 'id="viewerMap"', 'id="viewerMeta"', 'id="viewerClose"', 'id="viewerFit"'):
             self.assertIn(ident, html)
         _, _, app = self.get("/static/app.js")
         text = app.decode()
@@ -888,6 +888,11 @@ class TestInterfaceAssets(ServerTestCase):
         self.assertIn("function closeViewer()", text)
         self.assertIn("wireBrowseLinks(popup, report)", text)
         self.assertIn('e.key === "Escape"', text)
+        # The picture pans and zooms in a pixel-space Leaflet map, never in geographic coordinates.
+        viewer = text[text.index("function openViewer"):text.index("function closeViewer")]
+        self.assertIn("L.CRS.Simple", viewer)
+        self.assertIn("L.imageOverlay(g.browse, viewerBounds)", viewer)
+        self.assertIn("VIEWER_MAX_ZOOM", text)
         # The browse image is never placed on the map: no scene tile route, pane, or overlay code.
         self.assertNotIn("/tiles/emit/", text)
         self.assertNotIn('createPane("scene")', text)
