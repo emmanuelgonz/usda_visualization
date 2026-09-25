@@ -27,26 +27,27 @@ acquisition. Counts over the CONUS bounding box (125°W–66.9°W, 24.4°N–49.
 Each granule carries `cloud_cover` as an integer percent (no blanks in a 2,000-row sample), a
 `time_start`, a title of the form `HLS.S30.T15TVH.2025203T170849.v2.0` whose third dot-separated
 field is the MGRS tile ID, and a `polygons` ring of five or six vertices in latitude-longitude
-order. About 900 distinct tiles cover CONUS.
+order. About 1,200 distinct tiles cover CONUS (1,223 in the fetched store).
 
 Two CMR limits shape the fetch. The JSON granule endpoint returns 15.5 KB per granule, 95% of it
 download links, so a full JSON pull would be about 19.6 GB; the CSV endpoint returns the granule
 ID, start time, and cloud cover at 3.1 KB per granule (5.3 MB per 2,000-row page, about 3.9 GB in
-total). The CSV lacks the tile ring, which is fetched once per tile from the JSON endpoint by
-pattern query (`granule_ur=HLS.S30.<tile>.*`, page size 1, about 0.5 s). Second, CMR refuses any
+total). The CSV lacks the tile outline, and a granule's `polygons` ring is its data footprint,
+which at a swath edge is a clipped piece of the tile, so outlines are not taken from granules at
+all: they are computed from the tile ID (§3.2). Second, CMR refuses any
 query whose `page_num × page_size` exceeds 1,000,000 rows, so the fetch splits by collection and
 month; the busiest month is 9 pages.
 
 ## 3. Architecture
 
 Counting happens on the server, in SQLite, because 1.27 million rows do not belong in the browser;
-the tile rings (about 900 features) ship once and the browser recolours them from a small counts
+the tile outlines (about 1,200 features) ship once and the browser recolours them from a small counts
 response. This departs from the EMIT and ECOSTRESS layers, which filter their few-tens-of-thousands
 of footprints client-side.
 
 | Component | Purpose |
 | --- | --- |
-| `viz/fetch_hls.py` | Pages CMR by collection and month into `data/hls/hls.sqlite`; fills tile rings |
+| `viz/fetch_hls.py` | Pages CMR by collection and month into `data/hls/hls.sqlite`; writes computed tile outlines |
 | `viz/hls.py` | `Store` (schema, month replacement, counts, acquisitions, tile GeoJSON), tile-ID parsing, month ranges, CSV parsing |
 | `viz/cmr.py` | Gains `fetch_bytes(url)` with the same retry policy as `fetch_page` |
 | `viz/paths.py` | Gains `HLS_DATA` and `HLS_DB` |
@@ -60,12 +61,14 @@ of footprints client-side.
 
 | Table | Columns | Indexes |
 | --- | --- | --- |
-| `acq` | `id TEXT PRIMARY KEY` (granule UR), `tile TEXT`, `date TEXT` (YYYY-MM-DD, UTC), `time TEXT` (ISO start), `sensor TEXT` (`L30` or `S30`), `cloud INTEGER` | `(date)`, `(tile, date)` |
+| `acq` | `id TEXT PRIMARY KEY` (granule UR), `tile TEXT`, `date TEXT` (YYYY-MM-DD, UTC), `time TEXT` (ISO start), `sensor TEXT` (`L30` or `S30`), `cloud INTEGER` | `(date)`, `(date, cloud, tile)`, `(tile, date, cloud, sensor, time)` |
 | `tiles` | `tile TEXT PRIMARY KEY`, `ring TEXT` (JSON array of [lon, lat] pairs, closed) | |
 | `months` | `sensor TEXT`, `month TEXT` (YYYY-MM), `count INTEGER`, `fetched_at TEXT` (ISO UTC); primary key `(sensor, month)` | |
 
-The file is about 120 MB. SQLite's default rollback journal lets the server keep reading committed
-state while a fetch replaces a month, so no `.part` rename is needed.
+The file is about 350 MB with the covering indexes. While a fetch commits a month, the writer's
+lock outlasts a reader's default wait, so the server opens the store with a 0.5 s timeout and
+degrades on a locked store: the catalog reports `hls_busy` with zero counts, the two HLS routes
+return 503, and `/api/point` returns a null HLS block; no `.part` rename is needed.
 
 ### 3.2 Fetch
 
@@ -80,10 +83,13 @@ value is stored with `cloud NULL` and never counts as clear.
 
 A month whose `months` row was written more than 60 days after the month ended is frozen and
 skipped on later runs, so the first run is about 635 pages and 15–25 minutes, and a refresh
-touches only the current month and the one or two before it. After the CSV pass, every tile in
-`acq` with no `tiles` row gets one JSON pattern query; the first run makes about 900 such requests
-in roughly eight minutes and later runs make none. A ring whose query returns no polygon is logged
-and left absent, so its tile is counted but never drawn.
+touches only the current month and the one or two before it. After the CSV pass, every distinct
+tile in `acq` gets its outline computed from the tile ID: UTM zone, latitude band, the 100 km
+square from its column letter (three letter sets by zone mod 3) and row letter (offset five rows
+in even zones, resolved to the band's minimum northing with a 100 km tolerance), then the 109.8 km
+Sentinel-2 tile hung from the square's north-west corner, transformed to WGS84 with the GDAL
+bindings. Outlines are rewritten on every run in one transaction, in about a second. A tile whose
+ID cannot be placed is logged and left absent, so it is counted but never drawn.
 
 `./run.sh footprints` appends the HLS step after the coincidence step, so one command refreshes all
 three layers. `./run.sh serve` prints a note naming `./run.sh hls` when the database is absent and
@@ -97,7 +103,9 @@ queries:
 
 - `counts(start, end, cloud, sensor)`: one `GROUP BY tile` over `date BETWEEN start AND end AND
   cloud <= ?` with an optional sensor filter, returning `{tile: n}`. A two-week window scans
-  roughly 15,000 rows; a full season roughly 250,000, well under a second.
+  roughly 15,000 rows; a full season roughly 250,000. Measured on the full store with the covering
+  indexes: 4 ms for two weeks, 310 ms for a season with both sensors, and 1.2–1.3 s for a season
+  with one sensor, since neither index leads with `sensor`.
 - `acquisitions(tiles, start, end)`: rows for the given tiles in the range, oldest first, with
   `date`, `time`, `sensor`, `cloud`.
 - `tiles_geojson()`: a FeatureCollection with one polygon per `tiles` row and a `tile` property.
