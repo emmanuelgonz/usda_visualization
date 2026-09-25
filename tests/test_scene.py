@@ -197,7 +197,14 @@ class TestRenderTile(SceneTestCase):
                 t.join()
 
         self.assertTrue(all(name == names[0] for name in names))
-        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(calls), 2)  # one GeoTIFF translate, one GCP VRT translate; built once, not per thread
+
+    def test_forget_all_unlinks_both_vsimem_files(self):
+        scene.gcp_source("S1", CORNERS)
+        self.assertTrue(any("scene_S1" in e for e in gdal.ReadDirRecursive("/vsimem/") or []))
+        scene.forget_all()
+        entries = gdal.ReadDirRecursive("/vsimem/") or []
+        self.assertFalse([e for e in entries if "scene_" in e])
 
 
 if __name__ == "__main__":

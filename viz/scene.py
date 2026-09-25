@@ -110,18 +110,23 @@ _sources_guard = threading.Lock()
 def gcp_source(scene_id, corners):
     """Name of an in-memory VRT placing the browse PNG by its four corners, built once per process.
 
+    The PNG is decoded once into a GeoTIFF in /vsimem
+    (/vsimem/scene_<id>.tif) and the GCP VRT is built over that GeoTIFF
+    instead of the PNG, so every tile's warp reads an already-decoded raster
+    rather than re-decoding the PNG on every request.
+
     Built under the scene's own download lock so concurrent first requests for
-    one scene don't race to write (or read mid-write) the same /vsimem name.
+    one scene don't race to write (or read mid-write) the same /vsimem names.
     """
     with _sources_guard:
-        name = _sources.get(scene_id)
-    if name is not None:
-        return name
+        names = _sources.get(scene_id)
+    if names is not None:
+        return names[1]
     with _lock_for(scene_id):
         with _sources_guard:
-            name = _sources.get(scene_id)
-        if name is not None:
-            return name
+            names = _sources.get(scene_id)
+        if names is not None:
+            return names[1]
         png = str(browse_path(scene_id))
         src = gdal.Open(png)
         width, height = src.RasterXSize, src.RasterYSize
@@ -132,21 +137,24 @@ def gcp_source(scene_id, corners):
         srs = osr.SpatialReference()
         srs.ImportFromEPSG(4326)
         srs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
-        name = f"/vsimem/scene_{scene_id}.vrt"
-        gdal.Translate(name, src, format="VRT", bandList=bands, GCPs=gcps, outputSRS=srs.ExportToWkt())
+        tif = f"/vsimem/scene_{scene_id}.tif"
+        gdal.Translate(tif, src, format="GTiff", bandList=bands)
+        vrt = f"/vsimem/scene_{scene_id}.vrt"
+        gdal.Translate(vrt, tif, format="VRT", GCPs=gcps, outputSRS=srs.ExportToWkt())
         with _sources_guard:
-            _sources[scene_id] = name
-    return name
+            _sources[scene_id] = (tif, vrt)
+    return vrt
 
 
 def forget_all():
-    """Drop the per-process VRTs (tests swap the cache directory)."""
+    """Drop the per-process GeoTIFFs and VRTs (tests swap the cache directory)."""
     with _sources_guard:
-        for name in _sources.values():
-            try:
-                gdal.Unlink(name)
-            except RuntimeError:
-                pass
+        for tif, vrt in _sources.values():
+            for name in (vrt, tif):
+                try:
+                    gdal.Unlink(name)
+                except RuntimeError:
+                    pass
         _sources.clear()
 
 
