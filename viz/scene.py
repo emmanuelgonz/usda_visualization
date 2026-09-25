@@ -5,6 +5,11 @@ control points (its pixel corners onto the footprint vertices in image
 order, see viz.emit.scene_corners) and warped per Web Mercator tile through
 the same disk tile cache as the CDL and CPC layers. The download is the
 project's only on-demand network access and is confined to the LP DAAC host.
+
+Browse images are about 2.7 MB each under cache/emit/, and warped tiles
+accumulate under cache/tiles/emit-<id>/ (tens of MB for a scene explored at
+zoom 13). Nothing prunes either cache; deleting those directories is safe
+at any time.
 """
 
 import http.client
