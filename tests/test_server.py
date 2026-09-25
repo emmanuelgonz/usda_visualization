@@ -661,6 +661,17 @@ class TestSceneTiles(ServerTestCase):
         self.assertEqual(ctx.exception.code, 502)
         self.assertEqual(len(self.calls), 2)
 
+    def test_off_scene_tile_is_transparent_and_skips_the_download(self):
+        from viz import gridmath
+        from viz import scene as scene_module
+
+        z = 8
+        x, y = gridmath.lonlat_to_tile(self.lon, self.lat, z)  # far from the scene's own footprint
+        status, ctype, body = self.get(f"/tiles/emit/{self.SCENE}/{z}/{x}/{y}.png")
+        self.assertEqual((status, ctype), (200, "image/png"))
+        self.assertEqual(body, scene_module.transparent_tile())
+        self.assertEqual(self.calls, [])
+
     def test_point_entries_carry_orientable_and_bbox(self):
         report = json.loads(self.get(self.point_url())[2])
         by_id = {g["id"]: g for g in report["emit"]}
@@ -1032,6 +1043,7 @@ class TestInterfaceAssets(ServerTestCase):
         show = text[text.index("function showScene"):text.index("function clearScene")]
         self.assertIn("clearScene()", show)                      # one scene at a time
         self.assertIn("map.fitBounds", show)
+        self.assertIn("bounds:", show)  # the tile layer is bounded so Leaflet never requests off-scene tiles
         self.assertIn("g.orientable", text)
         self.assertIn('class="show-scene"', text)
         self.assertIn("wireSceneLinks(popup, report)", text)

@@ -179,7 +179,8 @@ def transparent_tile():
     return _transparent
 
 
-def _touches(corners, z, x, y):
+def touches(corners, z, x, y):
+    """True when a scene's corner quad's bounding box overlaps one XYZ tile's bounds."""
     lons = [c[0] for c in corners]
     lats = [c[1] for c in corners]
     west, south, east, north = tile_lonlat_bounds(z, x, y)
@@ -188,7 +189,7 @@ def _touches(corners, z, x, y):
 
 def render_tile(scene_id, corners, z, x, y):
     """One tile of the scene as PNG bytes, from the disk cache when present."""
-    if not _touches(corners, z, x, y):
+    if not touches(corners, z, x, y):
         return transparent_tile()
     target = paths.TILE_CACHE / f"emit-{scene_id}" / str(z) / str(x) / f"{y}.png"
     if target.is_file():

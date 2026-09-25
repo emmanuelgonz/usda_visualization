@@ -409,11 +409,15 @@ class Handler(BaseHTTPRequestHandler):
         corners = emit.scene_corners(index, scene_id)
         if corners is None:
             return self._fail(HTTPStatus.NOT_FOUND, "scene cannot be oriented")
+        z, x, y = (int(match.group(k)) for k in ("z", "x", "y"))
+        if not scene.touches(corners, z, x, y):
+            # Off-scene tiles are answered without touching the network, so a
+            # browser panning past a scene's edge never waits on the download.
+            return self._send(scene.transparent_tile(), "image/png", cache=True)
         try:
             scene.ensure_browse(scene_id, props.get("browse"))
         except scene.BrowseError as exc:
             return self._fail(HTTPStatus.BAD_GATEWAY, f"browse image unavailable: {exc}")
-        z, x, y = (int(match.group(k)) for k in ("z", "x", "y"))
         self._send(scene.render_tile(scene_id, corners, z, x, y), "image/png", cache=True)
 
     def _hls_params(self, query, required):

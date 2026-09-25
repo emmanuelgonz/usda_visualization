@@ -398,15 +398,14 @@
   function showScene(id, start, bbox) {
     clearScene();
     state.scene = { id: id, start: start };
+    var bounds = (bbox && bbox.length === 4) ? L.latLngBounds([bbox[1], bbox[0]], [bbox[3], bbox[2]]) : null;
+    // Bounding the layer keeps Leaflet from ever requesting tiles outside the scene.
     sceneLayer = L.tileLayer("/tiles/emit/" + encodeURIComponent(id) + "/{z}/{x}/{y}.png" +
                              "?t=" + state.catalog.server_token, {
-      pane: "scene", maxNativeZoom: 13, maxZoom: 15, noWrap: true,
+      pane: "scene", maxNativeZoom: 13, maxZoom: 15, noWrap: true, bounds: bounds,
       opacity: state.sceneOpacity, attribution: "NASA EMIT L2A browse"
     }).addTo(map);
-    if (bbox && bbox.length === 4) {
-      var bounds = L.latLngBounds([bbox[1], bbox[0]], [bbox[3], bbox[2]]);
-      if (!map.getBounds().contains(bounds)) { map.fitBounds(bounds, { padding: [20, 20] }); }
-    }
+    if (bounds && !map.getBounds().contains(bounds)) { map.fitBounds(bounds, { padding: [20, 20] }); }
     syncSceneControl();
   }
 
