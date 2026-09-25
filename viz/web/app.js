@@ -680,6 +680,39 @@
   // popup.update() would re-render the content from its HTML string, which
   // rebuilds the section closed, so the layout, position, and pan steps of
   // Leaflet 1.9.4's update() are called directly instead.
+  // The EMIT browse image is a picture in the sensor's own grid with no
+  // coordinates, so it is shown over the map rather than placed on it.
+  function openViewer(g) {
+    el("viewerImg").src = g.browse;
+    el("viewerMeta").innerHTML =
+      (g.start || "").slice(0, 10) + " · " + g.id + " · " +
+      (g.cloud === null || g.cloud === undefined ? "?" : g.cloud.toFixed(0) + "%") + " cloud" +
+      (g.data ? ' · <a href="' + g.data + '" target="_blank" rel="noopener">data</a>' : "") +
+      ' · <a href="' + g.browse + '" target="_blank" rel="noopener">open in a new tab</a>';
+    el("viewer").hidden = false;
+  }
+
+  function closeViewer() {
+    el("viewer").hidden = true;
+    el("viewerImg").removeAttribute("src");
+  }
+
+  // "browse" links inside an open popup open the viewer; the href stays for right-click.
+  function wireBrowseLinks(popup, report) {
+    var node = popup.getElement();
+    if (!node) { return; }
+    var byId = {};
+    (report.emit || []).forEach(function (g) { byId[g.id] = g; });
+    Array.prototype.forEach.call(node.querySelectorAll("a.browse-scene"), function (link) {
+      link.addEventListener("click", function (event) {
+        var g = byId[link.dataset.id];
+        if (!g) { return; }
+        event.preventDefault();
+        openViewer(g);
+      });
+    });
+  }
+
   function wireFolds(popup) {
     var node = popup.getElement();
     if (!node) { return; }
@@ -739,7 +772,7 @@
         var inWin = bounds && t >= bounds[0] && t <= bounds[1];
         return "<li" + (inWin ? ' class="in"' : "") + '><span class="when">' + g.start.slice(0, 10) + "</span>" +
                "<span>" + (g.cloud === null ? "?" : g.cloud.toFixed(0) + "%") + " cloud</span>" +
-               (g.browse ? ' <a href="' + g.browse + '" target="_blank" rel="noopener">browse</a>' : "") +
+               (g.browse ? ' <a href="' + g.browse + '" class="browse-scene" data-id="' + g.id + '">browse</a>' : "") +
                (g.data ? ' <a href="' + g.data + '" target="_blank" rel="noopener">data</a>' : "") +
                (g.eco && g.eco.length && state.coincide && Math.abs(g.eco[0].dt) <= coincideSeconds()
                  ? ' <span class="eco-tag">ECOSTRESS ' + formatDt(g.eco[0].dt) + "</span>" : "") +
@@ -961,6 +994,10 @@
       });
     });
 
+    el("viewerClose").addEventListener("click", closeViewer);
+    el("viewer").addEventListener("click", function (e) { if (e.target === el("viewer")) { closeViewer(); } });
+    document.addEventListener("keydown", function (e) { if (e.key === "Escape" && !el("viewer").hidden) { closeViewer(); } });
+
     map.on("click", function (e) {
       // Cap the box at 60% of the map so long lists scroll inside it (Leaflet
       // adds leaflet-popup-scrolled) instead of running off the map.
@@ -979,7 +1016,7 @@
       var popup = readoutPopup;
       fetch(url).then(function (r) { return r.json(); })
         .then(function (report) {
-          if (popup.isOpen()) { popup.setContent(showReadout(report)); wireFolds(popup); }
+          if (popup.isOpen()) { popup.setContent(showReadout(report)); wireFolds(popup); wireBrowseLinks(popup, report); }
         })
         .catch(function () { if (popup.isOpen()) { popup.setContent('<p class="note">Read failed.</p>'); } });
     });

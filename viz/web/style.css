@@ -151,3 +151,17 @@ output { font-variant-numeric: tabular-nums; font-weight: 450; color: var(--mute
 #hlsLegend span.zero::before { background: #fff; opacity: 0.4; }
 .leaflet-hls-pane { cursor: default; }
 label .note { font-weight: 450; }
+
+/* EMIT browse viewer: the quicklook shown over the map instead of in a new tab.
+   The image has no coordinates, so it is a picture, not a layer. */
+#viewer { position: absolute; inset: 0 340px 0 0; z-index: 1100; background: rgba(20,20,20,0.72);
+          display: flex; align-items: center; justify-content: center; }
+#viewer[hidden] { display: none; }
+#viewerBox { position: relative; max-width: 92%; max-height: 92%; background: #fff; border-radius: 4px;
+             padding: 12px 12px 8px; box-shadow: 0 6px 24px rgba(0,0,0,0.4); display: grid; gap: 6px; }
+#viewerImg { max-width: 100%; max-height: calc(92vh - 70px); display: block; margin: 0 auto; }
+#viewerMeta { margin: 0; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+#viewerMeta a { color: var(--accent); }
+#viewerClose { position: absolute; top: 4px; right: 6px; border: 0; background: transparent; font: 20px/1 system-ui;
+               color: var(--muted); cursor: pointer; }
+#viewerClose:hover { color: var(--panel-fg); }

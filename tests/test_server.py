@@ -876,6 +876,24 @@ class TestInterfaceAssets(ServerTestCase):
         self.assertIn("g.hls === null", text)
         self.assertIn("no week selected", text)
 
+    def test_emit_browse_opens_an_in_page_viewer(self):
+        _, _, index = self.get("/")
+        html = index.decode()
+        for ident in ('id="viewer"', 'id="viewerImg"', 'id="viewerMeta"', 'id="viewerClose"'):
+            self.assertIn(ident, html)
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        self.assertIn('class="browse-scene"', text)
+        self.assertIn("function openViewer(g)", text)
+        self.assertIn("function closeViewer()", text)
+        self.assertIn("wireBrowseLinks(popup, report)", text)
+        self.assertIn('e.key === "Escape"', text)
+        # The browse image is never placed on the map: no scene tile route, pane, or overlay code.
+        self.assertNotIn("/tiles/emit/", text)
+        self.assertNotIn('createPane("scene")', text)
+        _, _, css = self.get("/static/style.css")
+        self.assertIn("#viewer[hidden]", css.decode())
+
     def test_readout_lists_are_collapsible_and_remembered(self):
         _, _, app = self.get("/static/app.js")
         text = app.decode()
