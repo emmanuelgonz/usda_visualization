@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, urlparse
 
 import numpy as np
 
-from viz import coincidence, color, emit, hls, naming, paths, rasters
+from viz import basins, coincidence, color, emit, hls, naming, paths, rasters
 
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -184,6 +184,14 @@ def hls_block(lon, lat, tile_index, store, granules, start, end, cloud, sensor, 
     return block
 
 
+def basin_units(lon, lat):
+    """{'huc2': {huc, name} | None, 'huc4': ...} from the vendored hydrologic units, or None when neither file exists."""
+    indexes = {level: basins.index_for(path) for level, path in (("huc2", paths.BASINS2), ("huc4", paths.BASINS4))}
+    if all(index is None for index in indexes.values()):
+        return None
+    return {level: index.covering(lon, lat) if index is not None else None for level, index in indexes.items()}
+
+
 def point_report(lon, lat, crop, year, cdl_year, week=None, hls_params=None):
     """CDL class, crop-cover split, and the weekly CPC series at one location."""
     x5070, y5070 = rasters.lonlat_to_5070(lon, lat)
@@ -252,6 +260,7 @@ def point_report(lon, lat, crop, year, cdl_year, week=None, hls_params=None):
         "emit": granules,
         "eco": eco_swaths,
         "week_sunday": sunday,
+        "basins": basin_units(lon, lat),
         "hls": hls_report,
     }
 

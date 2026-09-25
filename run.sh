@@ -27,6 +27,15 @@ case "${1:-}" in
     python3 -m viz.vendor_states "/vsizip/$tmp/states.zip/cb_2023_us_state_5m.shp" viz/web/vendor/states.geojson
     rm -rf "$tmp"
     ls -la viz/web/vendor/states.geojson
+    # Hydrologic units: USGS 1:250,000 HUC8 polygons (21 MB) dissolved into the
+    # HUC2 regions and HUC4 subregions, named from USGS's huc_name.txt.
+    tmp=$(mktemp -d)
+    curl -fsSL -o "$tmp/huc250k_shp.zip" https://water.usgs.gov/GIS/dsdl/huc250k_shp.zip
+    curl -fsSL -o "$tmp/huc_name.txt" https://water.usgs.gov/GIS/huc_name.txt
+    python3 -m viz.vendor_basins "/vsizip/$tmp/huc250k_shp.zip/huc250k_shp/huc250k.shp" "$tmp/huc_name.txt" \
+      viz/web/vendor/basins2.geojson viz/web/vendor/basins4.geojson
+    rm -rf "$tmp"
+    ls -la viz/web/vendor/basins2.geojson viz/web/vendor/basins4.geojson
     ;;
   footprints|emit)
     # Fetches EMIT L2A footprints and ECOSTRESS swath boxes over CONUS from
@@ -66,6 +75,9 @@ case "${1:-}" in
     fi
     if [ ! -f data/eco/footprints.geojson ]; then
       echo "note: no ECOSTRESS footprints (data/eco/footprints.geojson); the ECOSTRESS layer is off until ./run.sh footprints is run" >&2
+    fi
+    if [ ! -f viz/web/vendor/basins2.geojson ] || [ ! -f viz/web/vendor/basins4.geojson ]; then
+      echo "note: basin outlines missing (viz/web/vendor/basins2.geojson, basins4.geojson); the basin layers are off until ./run.sh vendor is run" >&2
     fi
     if [ ! -f data/hls/hls.sqlite ]; then
       echo "note: no HLS store (data/hls/hls.sqlite); the HLS layer is off until ./run.sh hls is run" >&2

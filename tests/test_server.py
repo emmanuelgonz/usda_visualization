@@ -25,7 +25,7 @@ class ServerTestCase(unittest.TestCase):
     def setUpClass(cls):
         cls.tmp = Path(tempfile.mkdtemp())
         cls._saved = (paths.DATA, paths.CPC_DATA, paths.CDL_DATA, paths.MASK_DATA,
-                      paths.CATALOG, paths.TILE_CACHE, paths.EMIT_FOOTPRINTS, paths.ECO_FOOTPRINTS,
+                      paths.CATALOG, paths.TILE_CACHE, paths.EMIT_FOOTPRINTS, paths.ECO_FOOTPRINTS, paths.BASINS2, paths.BASINS4,
                       paths.HLS_DB)
 
         paths.DATA = cls.tmp / "data"
@@ -36,6 +36,8 @@ class ServerTestCase(unittest.TestCase):
         paths.TILE_CACHE = cls.tmp / "cache" / "tiles"
         paths.EMIT_FOOTPRINTS = paths.DATA / "emit" / "footprints.geojson"
         paths.ECO_FOOTPRINTS = paths.DATA / "eco" / "footprints.geojson"
+        paths.BASINS2 = cls.tmp / "vendor" / "basins2.geojson"
+        paths.BASINS4 = cls.tmp / "vendor" / "basins4.geojson"
         paths.HLS_DB = paths.DATA / "hls" / "hls.sqlite"
 
         (paths.CPC_DATA / "corn" / "cond").mkdir(parents=True)
@@ -118,6 +120,15 @@ class ServerTestCase(unittest.TestCase):
         paths.EMIT_FOOTPRINTS.write_text(json.dumps(emit_doc))
         hls_store.close()
 
+        # Hydrologic units: a region and a subregion around the fixture centre.
+        paths.BASINS2.parent.mkdir(parents=True, exist_ok=True)
+        paths.BASINS2.write_text(json.dumps({"type": "FeatureCollection", "features": [
+            {"type": "Feature", "properties": {"huc": "10", "name": "Missouri Region", "label_lon": cls.lon, "label_lat": cls.lat},
+             "geometry": {"type": "Polygon", "coordinates": [square(cls.lon, cls.lat, 2.0)]}}]}))
+        paths.BASINS4.write_text(json.dumps({"type": "FeatureCollection", "features": [
+            {"type": "Feature", "properties": {"huc": "1027", "name": "Kansas", "label_lon": cls.lon, "label_lat": cls.lat},
+             "geometry": {"type": "Polygon", "coordinates": [square(cls.lon, cls.lat, 1.0)]}}]}))
+
         cls.server = tileserver.make_server(0)
         cls.port = cls.server.server_address[1]
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
@@ -132,7 +143,7 @@ class ServerTestCase(unittest.TestCase):
         cls.server.shutdown()
         cls.server.server_close()
         (paths.DATA, paths.CPC_DATA, paths.CDL_DATA, paths.MASK_DATA,
-         paths.CATALOG, paths.TILE_CACHE, paths.EMIT_FOOTPRINTS, paths.ECO_FOOTPRINTS,
+         paths.CATALOG, paths.TILE_CACHE, paths.EMIT_FOOTPRINTS, paths.ECO_FOOTPRINTS, paths.BASINS2, paths.BASINS4,
          paths.HLS_DB) = cls._saved
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
@@ -596,7 +607,46 @@ class TestHlsPairsOnEmit(ServerTestCase):
         self.assertEqual(by_id["no-tile"]["hls_near"], [])
 
 
+class TestBasins(ServerTestCase):
+    def test_point_names_the_region_and_subregion(self):
+        report = json.loads(self.get(self.point_url())[2])
+        self.assertEqual(report["basins"], {"huc2": {"huc": "10", "name": "Missouri Region"},
+                                            "huc4": {"huc": "1027", "name": "Kansas"}})
+
+    def test_point_outside_the_units_has_nulls_and_missing_files_give_none(self):
+        far = json.loads(self.get(f"/api/point?lon={self.lon + 10:.6f}&lat={self.lat:.6f}&crop=corn&year=2024&cdl_year=2024")[2])
+        self.assertEqual(far["basins"], {"huc2": None, "huc4": None})
+        moved2, moved4 = paths.BASINS2.with_name("m2.geojson"), paths.BASINS4.with_name("m4.geojson")
+        paths.BASINS4.rename(moved4)
+        try:
+            self.assertEqual(json.loads(self.get(self.point_url())[2])["basins"],
+                             {"huc2": {"huc": "10", "name": "Missouri Region"}, "huc4": None})   # one file missing
+            paths.BASINS2.rename(moved2)
+            self.assertIsNone(json.loads(self.get(self.point_url())[2])["basins"])
+        finally:
+            if moved2.exists(): moved2.rename(paths.BASINS2)
+            moved4.rename(paths.BASINS4)
+
+
 class TestInterfaceAssets(ServerTestCase):
+    def test_basin_layers_and_readout_line(self):
+        _, _, index = self.get("/")
+        html = index.decode()
+        self.assertIn('id="basins2"', html)
+        self.assertIn('id="basins4"', html)
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        self.assertIn("/static/vendor/basins2.geojson", text)
+        self.assertIn("/static/vendor/basins4.geojson", text)
+        self.assertIn('map.createPane("basins")', text)
+        self.assertIn("basinLoading[level]", text)                # one fetch per level, however fast the box is toggled
+        self.assertIn("458", text[text.index('map.getPane("basins")'):text.index('map.getPane("basins")') + 80])
+        self.assertIn("interactive: false", text[text.index("function loadBasins"):text.index("function syncBasins")])
+        self.assertIn("outside the mapped units", text)
+        self.assertIn("(HUC ", text)
+        _, _, css = self.get("/static/style.css")
+        self.assertIn(".basin-label", css.decode())
+
     def test_ecostress_plus_hls_coincidence_mark(self):
         _, _, index = self.get("/")
         html = index.decode()
