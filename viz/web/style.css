@@ -151,12 +151,3 @@ output { font-variant-numeric: tabular-nums; font-weight: 450; color: var(--mute
 #hlsLegend span.zero::before { background: #fff; opacity: 0.4; }
 .leaflet-hls-pane { cursor: default; }
 label .note { font-weight: 450; }
-
-/* EMIT scene overlay */
-#sceneRow { display: grid; gap: 5px; }
-#sceneRow[hidden] { display: none; }
-#sceneName { font-variant-numeric: tabular-nums; }
-#sceneRemove { border: 1px solid var(--line); border-radius: 3px; background: #fff; cursor: pointer;
-               font: inherit; line-height: 1; padding: 0 5px; }
-#sceneRemove:hover { border-color: var(--accent); }
-.readout-popup .emit-list a.show-scene { font-weight: 550; }

@@ -26,7 +26,7 @@ class ServerTestCase(unittest.TestCase):
         cls.tmp = Path(tempfile.mkdtemp())
         cls._saved = (paths.DATA, paths.CPC_DATA, paths.CDL_DATA, paths.MASK_DATA,
                       paths.CATALOG, paths.TILE_CACHE, paths.EMIT_FOOTPRINTS, paths.ECO_FOOTPRINTS,
-                      paths.HLS_DB, paths.SCENE_CACHE)
+                      paths.HLS_DB)
 
         paths.DATA = cls.tmp / "data"
         paths.CPC_DATA = paths.DATA / "cpc"
@@ -37,7 +37,6 @@ class ServerTestCase(unittest.TestCase):
         paths.EMIT_FOOTPRINTS = paths.DATA / "emit" / "footprints.geojson"
         paths.ECO_FOOTPRINTS = paths.DATA / "eco" / "footprints.geojson"
         paths.HLS_DB = paths.DATA / "hls" / "hls.sqlite"
-        paths.SCENE_CACHE = cls.tmp / "cache" / "emit"
 
         (paths.CPC_DATA / "corn" / "cond").mkdir(parents=True)
         paths.CDL_DATA.mkdir(parents=True)
@@ -66,9 +65,7 @@ class ServerTestCase(unittest.TestCase):
         def feature(fid, ring, start, cloud):
             return {"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [ring]},
                     "properties": {"id": fid, "start": start, "end": start, "cloud": cloud,
-                                   "year": int(start[:4]),
-                                   "browse": f"https://data.lpdaac.earthdatacloud.nasa.gov/quicklook/{fid}.png",
-                                   "data": None}}
+                                   "year": int(start[:4]), "browse": "https://b/x.png", "data": None}}
 
         paths.EMIT_FOOTPRINTS.parent.mkdir(parents=True)
         paths.EMIT_FOOTPRINTS.write_text(json.dumps({"type": "FeatureCollection", "features": [
@@ -76,8 +73,6 @@ class ServerTestCase(unittest.TestCase):
             feature("near-new", square(cls.lon, cls.lat, 0.5), "2025-07-20T18:00:00Z", 40.0),
             feature("far", square(cls.lon + 20, cls.lat, 0.5), "2024-07-01T18:00:00Z", 1.0),
             feature("no-tile", square(cls.lon + 10, cls.lat, 0.5), "2025-07-20T18:00:00Z", 5.0),
-            feature("EMIT_L2A_RFL_001_20240730T203950_2421214_004", square(cls.lon + 30, cls.lat, 0.4), "2024-07-30T20:39:50Z", 10.0),
-            feature("EMIT_L2A_RFL_001_20240730T204002_2421214_005", square(cls.lon + 30.6, cls.lat + 0.5, 0.4), "2024-07-30T20:40:02Z", 10.0),
         ]}))
 
         def eco_feature(fid, ring, start, daynight):
@@ -127,8 +122,6 @@ class ServerTestCase(unittest.TestCase):
         cls.port = cls.server.server_address[1]
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
-        from viz import scene as scene_module
-        scene_module.forget_all()
 
     @classmethod
     def zxy(cls):
@@ -140,7 +133,7 @@ class ServerTestCase(unittest.TestCase):
         cls.server.server_close()
         (paths.DATA, paths.CPC_DATA, paths.CDL_DATA, paths.MASK_DATA,
          paths.CATALOG, paths.TILE_CACHE, paths.EMIT_FOOTPRINTS, paths.ECO_FOOTPRINTS,
-         paths.HLS_DB, paths.SCENE_CACHE) = cls._saved
+         paths.HLS_DB) = cls._saved
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
     def get(self, path):
@@ -320,11 +313,11 @@ class TestEmitRoutes(ServerTestCase):
         status, ctype, body = self.get("/api/emit/footprints.geojson")
         self.assertEqual(status, 200)
         self.assertIn("geo+json", ctype)
-        self.assertEqual(len(json.loads(body)["features"]), 6)
+        self.assertEqual(len(json.loads(body)["features"]), 4)
 
     def test_catalog_reports_emit_count_and_fetched(self):
         catalog = json.loads(self.get("/api/catalog")[2])
-        self.assertEqual(catalog["emit_count"], 6)
+        self.assertEqual(catalog["emit_count"], 4)
         self.assertRegex(catalog["emit_fetched"], r"^\d{4}-\d{2}-\d{2}T")
 
     def test_point_lists_covering_granules_newest_first(self):
@@ -573,113 +566,6 @@ class TestHlsPairsOnEmit(ServerTestCase):
                          [("2025-07-21", "L30", 80, 1), ("2025-07-18", "S30", 10, -2), ("2025-07-23", "S30", 10, 3)])
         self.assertEqual(by_id["near-old"]["hls_near"], [])
         self.assertEqual(by_id["no-tile"]["hls_near"], [])
-
-
-class TestSceneTiles(ServerTestCase):
-    SCENE = "EMIT_L2A_RFL_001_20240730T203950_2421214_004"
-
-    def setUp(self):
-        from viz import scene as scene_module
-        from tests.test_scene import write_png
-        self.calls = []
-
-        def fake(url, dest):
-            self.calls.append(url)
-            write_png(dest)
-
-        self._real = scene_module.download
-        scene_module.download = fake
-        # ensure_browse's default argument bound the real function at import time; rebind it.
-        self._real_ensure = scene_module.ensure_browse
-        scene_module.ensure_browse = lambda sid, url, fetch=fake: self._real_ensure(sid, url, fetch=fetch)
-        self.addCleanup(self._restore)
-        for path in list(paths.SCENE_CACHE.glob("*")) if paths.SCENE_CACHE.is_dir() else []:
-            path.unlink()
-        scene_module.forget_all()
-
-    def _restore(self):
-        from viz import scene as scene_module
-        scene_module.download = self._real
-        scene_module.ensure_browse = self._real_ensure
-
-    def tile_url(self, scene_id, z=8):
-        from viz import gridmath
-        x, y = gridmath.lonlat_to_tile(self.lon + 30, self.lat, z)
-        return f"/tiles/emit/{scene_id}/{z}/{x}/{y}.png"
-
-    def test_serves_a_tile_and_downloads_the_browse_once(self):
-        status, ctype, body = self.get(self.tile_url(self.SCENE))
-        self.assertEqual((status, ctype), (200, "image/png"))
-        self.assertEqual(_png_size(body), (256, 256))
-        self.assertEqual(len(self.calls), 1)
-        self.assertIn("2421214_004", self.calls[0])
-        self.get(self.tile_url(self.SCENE))
-        self.assertEqual(len(self.calls), 1)
-
-    def test_unknown_scene_and_unorientable_scene_are_404(self):
-        for scene_id, message in (("nope", "unknown EMIT scene"), ("near-new", "scene cannot be oriented")):
-            with self.assertRaises(urllib.error.HTTPError) as ctx:
-                self.get(self.tile_url(scene_id))
-            self.assertEqual(ctx.exception.code, 404)
-            self.assertIn(message, ctx.exception.read().decode())
-        self.assertEqual(self.calls, [])
-
-    def test_path_characters_in_the_id_never_reach_the_handler(self):
-        with self.assertRaises(urllib.error.HTTPError) as ctx:
-            self.get("/tiles/emit/../x/8/1/1.png")
-        self.assertEqual(ctx.exception.code, 404)
-        self.assertEqual(self.calls, [])
-
-    def test_failed_download_is_502(self):
-        from viz import scene as scene_module
-
-        def broken(url, dest):
-            raise scene_module.BrowseError("timed out")
-
-        scene_module.ensure_browse = lambda sid, url, fetch=broken: self._real_ensure(sid, url, fetch=fetch)
-        with self.assertRaises(urllib.error.HTTPError) as ctx:
-            self.get(self.tile_url(self.SCENE))
-        self.assertEqual(ctx.exception.code, 502)
-        self.assertIn("browse image unavailable", ctx.exception.read().decode())
-
-    def test_invalid_browse_image_is_502_and_not_cached(self):
-        from viz import scene as scene_module
-
-        def junk(url, dest):
-            self.calls.append(url)
-            Path(dest).write_bytes(b"<html>Earthdata Login</html>")
-
-        scene_module.ensure_browse = lambda sid, url, fetch=junk: self._real_ensure(sid, url, fetch=fetch)
-        with self.assertRaises(urllib.error.HTTPError) as ctx:
-            self.get(self.tile_url(self.SCENE))
-        self.assertEqual(ctx.exception.code, 502)
-        self.assertIn("browse image unavailable", ctx.exception.read().decode())
-        self.assertEqual(len(self.calls), 1)
-        # Nothing was cached, so a second request retries the fetch rather than failing forever.
-        with self.assertRaises(urllib.error.HTTPError) as ctx:
-            self.get(self.tile_url(self.SCENE))
-        self.assertEqual(ctx.exception.code, 502)
-        self.assertEqual(len(self.calls), 2)
-
-    def test_off_scene_tile_is_transparent_and_skips_the_download(self):
-        from viz import gridmath
-        from viz import scene as scene_module
-
-        z = 8
-        x, y = gridmath.lonlat_to_tile(self.lon, self.lat, z)  # far from the scene's own footprint
-        status, ctype, body = self.get(f"/tiles/emit/{self.SCENE}/{z}/{x}/{y}.png")
-        self.assertEqual((status, ctype), (200, "image/png"))
-        self.assertEqual(body, scene_module.transparent_tile())
-        self.assertEqual(self.calls, [])
-
-    def test_point_entries_carry_orientable_and_bbox(self):
-        report = json.loads(self.get(self.point_url())[2])
-        by_id = {g["id"]: g for g in report["emit"]}
-        self.assertFalse(by_id["near-new"]["orientable"])
-        self.assertEqual(len(by_id["near-new"]["bbox"]), 4)
-        self.assertAlmostEqual(by_id["near-new"]["bbox"][0], self.lon - 0.5, places=6)
-        far = json.loads(self.get(f"/api/point?lon={self.lon + 30:.6f}&lat={self.lat:.6f}&crop=corn&year=2024&cdl_year=2024")[2])
-        self.assertTrue({g["id"]: g for g in far["emit"]}[self.SCENE]["orientable"])
 
 
 class TestInterfaceAssets(ServerTestCase):
@@ -1027,26 +913,6 @@ class TestInterfaceAssets(ServerTestCase):
         result = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "same day|−2 d|+3 d|+1 d")
-
-    def test_scene_overlay_controls_and_layer(self):
-        _, _, index = self.get("/")
-        html = index.decode()
-        for ident in ('id="sceneRow"', 'id="sceneName"', 'id="sceneRemove"', 'id="sceneOpacity"', 'id="sceneOpacityOut"'):
-            self.assertIn(ident, html)
-        self.assertIn("Scene on map", html)
-        _, _, app = self.get("/static/app.js")
-        text = app.decode()
-        self.assertIn('map.createPane("scene")', text)
-        self.assertIn("453", text[text.index('map.getPane("scene")'):text.index('map.getPane("scene")') + 80])
-        self.assertIn('"/tiles/emit/" + ', text)
-        self.assertIn("maxNativeZoom: 13", text[text.index("function showScene"):text.index("function clearScene")])
-        show = text[text.index("function showScene"):text.index("function clearScene")]
-        self.assertIn("clearScene()", show)                      # one scene at a time
-        self.assertIn("map.fitBounds", show)
-        self.assertIn("bounds:", show)  # the tile layer is bounded so Leaflet never requests off-scene tiles
-        self.assertIn("g.orientable", text)
-        self.assertIn('class="show-scene"', text)
-        self.assertIn("wireSceneLinks(popup, report)", text)
 
 
 if __name__ == "__main__":

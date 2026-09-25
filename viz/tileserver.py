@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, urlparse
 
 import numpy as np
 
-from viz import coincidence, color, emit, hls, naming, paths, rasters, scene
+from viz import coincidence, color, emit, hls, naming, paths, rasters
 
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -29,9 +29,6 @@ TILE_CDL_RE = re.compile(r"^/tiles/cdl/(?P<year>\d{4})/(?P<z>\d+)/(?P<x>\d+)/(?P
 TILE_CPC_RE = re.compile(
     r"^/tiles/cpc/(?P<crop>[a-z]+)/(?P<var>cond|prog)/(?P<year>\d{4})/(?P<week>\d+)"
     r"/(?P<z>\d+)/(?P<x>\d+)/(?P<y>\d+)\.png$"
-)
-TILE_EMIT_RE = re.compile(
-    r"^/tiles/emit/(?P<id>[A-Za-z0-9_.-]+)/(?P<z>\d+)/(?P<x>\d+)/(?P<y>\d+)\.png$"
 )
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 HLS_SENSORS = ("ALL", "L30", "S30")
@@ -217,9 +214,6 @@ def point_report(lon, lat, crop, year, cdl_year, week=None, hls_params=None):
     index = emit.index_for(paths.EMIT_FOOTPRINTS)
     # Copies, so tagging never touches the shared index; hls_near is the map-only pairing list.
     granules = [{k: v for k, v in g.items() if k != "hls_near"} for g in index.covering(lon, lat)] if index else []
-    for g in granules:
-        g["orientable"] = emit.scene_corners(index, g.get("id")) is not None
-        g["bbox"] = list(index.scene_bbox(g.get("id")) or ())
     eco_index = emit.index_for(paths.ECO_FOOTPRINTS)
     eco_swaths = eco_index.covering(lon, lat) if eco_index else []
     sunday = None
@@ -357,10 +351,6 @@ class Handler(BaseHTTPRequestHandler):
             if match:
                 return self._handle_cpc_tile(match, query)
 
-            match = TILE_EMIT_RE.match(route)
-            if match:
-                return self._handle_emit_tile(match)
-
             return self._fail(HTTPStatus.NOT_FOUND, "not found")
         except BrokenPipeError:
             pass
@@ -399,26 +389,6 @@ class Handler(BaseHTTPRequestHandler):
         z, x, y = (int(match.group(k)) for k in ("z", "x", "y"))
         self._send(render_cpc_tile(crop, var, year, week, z, x, y, mask_year),
                    "image/png", cache=True)
-
-    def _handle_emit_tile(self, match):
-        scene_id = match.group("id")
-        index = emit.index_for(paths.EMIT_FOOTPRINTS)
-        props = index.scene(scene_id) if index else None
-        if props is None:
-            return self._fail(HTTPStatus.NOT_FOUND, "unknown EMIT scene")
-        corners = emit.scene_corners(index, scene_id)
-        if corners is None:
-            return self._fail(HTTPStatus.NOT_FOUND, "scene cannot be oriented")
-        z, x, y = (int(match.group(k)) for k in ("z", "x", "y"))
-        if not scene.touches(corners, z, x, y):
-            # Off-scene tiles are answered without touching the network, so a
-            # browser panning past a scene's edge never waits on the download.
-            return self._send(scene.transparent_tile(), "image/png", cache=True)
-        try:
-            scene.ensure_browse(scene_id, props.get("browse"))
-        except scene.BrowseError as exc:
-            return self._fail(HTTPStatus.BAD_GATEWAY, f"browse image unavailable: {exc}")
-        self._send(scene.render_tile(scene_id, corners, z, x, y), "image/png", cache=True)
 
     def _hls_params(self, query, required):
         """Validated HLS parameters, or (None, message). Missing optional ones take defaults."""

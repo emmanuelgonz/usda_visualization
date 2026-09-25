@@ -30,9 +30,7 @@
     hls: false,
     hlsMode: "week",
     hlsCloud: 30,
-    hlsSensor: "ALL",
-    scene: null,            // {id, start} of the scene overlay on the map
-    sceneOpacity: 1.0
+    hlsSensor: "ALL"
   };
 
   // Hardcoded so the first paint fits CONUS before the boundary file loads.
@@ -65,10 +63,6 @@
   var COINCIDE_STEPS = [1, 5, 15, 30, 60, 120, 360, 720, 1440];   // minutes
   var ecoLayer = null;
   var ecoLoaded = false;
-
-  map.createPane("scene");
-  map.getPane("scene").style.zIndex = 453;   // above ECOSTRESS boxes, below EMIT outlines
-  var sceneLayer = null;
 
   map.createPane("hls");
   map.getPane("hls").style.zIndex = 451;   // above CPC, below ECOSTRESS and EMIT
@@ -392,50 +386,6 @@
       (state.catalog.eco_count > 0 ? '<span class="fillsw">filled = ECOSTRESS coincident</span>' : "") +
       (state.catalog.eco_count > 0 && state.catalog.emit_hls_paired > 0
         ? '<span class="fillsw hls">purple = ECOSTRESS + HLS coincident</span>' : "");
-  }
-
-  // One EMIT browse image on the map at a time, served as warped tiles.
-  function showScene(id, start, bbox) {
-    clearScene();
-    state.scene = { id: id, start: start };
-    var bounds = (bbox && bbox.length === 4) ? L.latLngBounds([bbox[1], bbox[0]], [bbox[3], bbox[2]]) : null;
-    // Bounding the layer keeps Leaflet from ever requesting tiles outside the scene.
-    sceneLayer = L.tileLayer("/tiles/emit/" + encodeURIComponent(id) + "/{z}/{x}/{y}.png" +
-                             "?t=" + state.catalog.server_token, {
-      pane: "scene", maxNativeZoom: 13, maxZoom: 15, noWrap: true, bounds: bounds,
-      opacity: state.sceneOpacity, attribution: "NASA EMIT L2A browse"
-    }).addTo(map);
-    if (bounds && !map.getBounds().contains(bounds)) { map.fitBounds(bounds, { padding: [20, 20] }); }
-    syncSceneControl();
-  }
-
-  function clearScene() {
-    if (sceneLayer) { map.removeLayer(sceneLayer); sceneLayer = null; }
-    state.scene = null;
-    syncSceneControl();
-  }
-
-  function syncSceneControl() {
-    var row = el("sceneRow");
-    row.hidden = !state.scene;
-    if (state.scene) {
-      el("sceneName").textContent = (state.scene.start || "").slice(0, 10) + " · " + state.scene.id;
-    }
-  }
-
-  // "show" links inside an open popup: the report's entries carry the bbox to zoom to.
-  function wireSceneLinks(popup, report) {
-    var node = popup.getElement();
-    if (!node) { return; }
-    var byId = {};
-    (report.emit || []).forEach(function (g) { byId[g.id] = g; });
-    Array.prototype.forEach.call(node.querySelectorAll("a.show-scene"), function (link) {
-      link.addEventListener("click", function (event) {
-        event.preventDefault();
-        var g = byId[link.dataset.id];
-        if (g) { showScene(g.id, g.start, g.bbox); }
-      });
-    });
   }
 
   function ecoStyleFor(bounds) {
@@ -789,7 +739,6 @@
         var inWin = bounds && t >= bounds[0] && t <= bounds[1];
         return "<li" + (inWin ? ' class="in"' : "") + '><span class="when">' + g.start.slice(0, 10) + "</span>" +
                "<span>" + (g.cloud === null ? "?" : g.cloud.toFixed(0) + "%") + " cloud</span>" +
-               (g.orientable ? ' <a href="#" class="show-scene" data-id="' + g.id + '">show</a>' : "") +
                (g.browse ? ' <a href="' + g.browse + '" target="_blank" rel="noopener">browse</a>' : "") +
                (g.data ? ' <a href="' + g.data + '" target="_blank" rel="noopener">data</a>' : "") +
                (g.eco && g.eco.length && state.coincide && Math.abs(g.eco[0].dt) <= coincideSeconds()
@@ -963,12 +912,6 @@
     el("states").addEventListener("change", syncStates);
     map.on("zoomend", syncStates);
     el("emit").addEventListener("change", function (e) { state.emit = e.target.checked; syncEmit(); });
-    el("sceneRemove").addEventListener("click", clearScene);
-    el("sceneOpacity").addEventListener("input", function (e) {
-      state.sceneOpacity = Number(e.target.value) / 100;
-      el("sceneOpacityOut").textContent = e.target.value + "%";
-      if (sceneLayer) { sceneLayer.setOpacity(state.sceneOpacity); }
-    });
     el("emitCloud").addEventListener("input", function (e) {
       state.emitCloud = Number(e.target.value); el("emitCloudOut").textContent = e.target.value + "%"; syncEmit();
     });
@@ -1036,7 +979,7 @@
       var popup = readoutPopup;
       fetch(url).then(function (r) { return r.json(); })
         .then(function (report) {
-          if (popup.isOpen()) { popup.setContent(showReadout(report)); wireFolds(popup); wireSceneLinks(popup, report); }
+          if (popup.isOpen()) { popup.setContent(showReadout(report)); wireFolds(popup); }
         })
         .catch(function () { if (popup.isOpen()) { popup.setContent('<p class="note">Read failed.</p>'); } });
     });
@@ -1052,7 +995,7 @@
     wire();
     refresh();
     loadStates();
-    drawEmitLegend(); drawEcoLegend(); drawHlsLegend(); syncEmit(); syncEco(); syncHls(); syncSceneControl();
+    drawEmitLegend(); drawEcoLegend(); drawHlsLegend(); syncEmit(); syncEco(); syncHls();
   }).catch(function () {
     el("pairing").textContent = "Catalog request failed; is the server running? Reload to retry.";
   });
