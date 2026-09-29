@@ -1117,13 +1117,30 @@ class TestInterfaceAssets(ServerTestCase):
         # The picture pans and zooms in a pixel-space Leaflet map, never in geographic coordinates.
         viewer = text[text.index("function openViewer"):text.index("function closeViewer")]
         self.assertIn("L.CRS.Simple", viewer)
-        self.assertIn("L.imageOverlay(g.browse, viewerBounds)", viewer)
+        self.assertIn("showViewerImage(g.browse)", viewer)
+        self.assertIn("L.imageOverlay(url, viewerBounds)", viewer)
         self.assertIn("VIEWER_MAX_ZOOM", text)
         # The browse image is never placed on the map: no scene tile route, pane, or overlay code.
         self.assertNotIn("/tiles/emit/", text)
         self.assertNotIn('createPane("scene")', text)
         _, _, css = self.get("/static/style.css")
         self.assertIn("#viewer[hidden]", css.decode())
+
+    def test_ecostress_browse_opens_the_viewer(self):
+        _, _, index = self.get("/")
+        self.assertIn("EMIT pictures have no map coordinates; ECOSTRESS tiles are shown in their own grid.",
+                      index.decode())
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        self.assertGreaterEqual(text.count('class="browse-eco"'), 2)   # the EMIT tag and the ECOSTRESS row
+        self.assertIn("function openEcoViewer", text)
+        self.assertIn("/api/eco/browse?id=", text)
+        self.assertIn("function showViewerImage", text)
+        self.assertIn("No tiled ECOSTRESS image covers this point for that swath.", text)
+        self.assertIn("land surface temperature", text)
+        wiring = text[text.index("function wireBrowseLinks"):text.index("function wireFolds")]
+        self.assertIn("a.browse-eco", wiring)
+        self.assertEqual(text.count("L.imageOverlay("), 1)
 
     def test_readout_uses_one_list_renderer_and_neutral_tags(self):
         _, _, app = self.get("/static/app.js")

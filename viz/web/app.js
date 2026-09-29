@@ -916,25 +916,71 @@
       (g.cloud === null || g.cloud === undefined ? "?" : g.cloud.toFixed(0) + "%") + " cloud" +
       (g.data ? ' · <a href="' + g.data + '" target="_blank" rel="noopener">data</a>' : "") +
       ' · <a href="' + g.browse + '" target="_blank" rel="noopener">open in a new tab</a>';
+    showViewerImage(g.browse);
+  }
+
+  // Shows the viewer and, when a url is given, loads that picture into the pixel-space map;
+  // with no url it clears any previous picture and leaves only the caption.
+  var viewerSeq = 0;
+  function showViewerImage(url) {
     el("viewer").hidden = false;
     if (!viewerMap) {
       viewerMap = L.map("viewerMap", { crs: L.CRS.Simple, minZoom: -5, maxZoom: VIEWER_MAX_ZOOM,
                                        zoomSnap: 0.25, attributionControl: false });
     }
-    if (viewerImage) { viewerMap.removeLayer(viewerImage); viewerImage = null; }
+    if (viewerImage) { viewerMap.removeLayer(viewerImage); viewerImage = null; viewerBounds = null; }
+    var seq = ++viewerSeq;
+    if (!url) { return; }
     var probe = new Image();
     probe.onload = function () {
+      if (seq !== viewerSeq) { return; }
       // CRS.Simple takes [y, x]; the image spans its pixel size, so zoom 0 is 1:1.
       viewerBounds = L.latLngBounds([[0, 0], [probe.naturalHeight, probe.naturalWidth]]);
-      viewerImage = L.imageOverlay(g.browse, viewerBounds).addTo(viewerMap);
+      viewerImage = L.imageOverlay(url, viewerBounds).addTo(viewerMap);
       viewerMap.setMaxBounds(viewerBounds.pad(0.5));
       viewerMap.invalidateSize();
       viewerFit();
     };
-    probe.src = g.browse;
+    probe.src = url;
+  }
+
+  // ECOSTRESS "browse": ask the server for the tiled land-surface-temperature image of a swath
+  // at the clicked point, then show it in the same viewer.
+  function openEcoViewer(swathId, latlng) {
+    el("viewerMeta").textContent = "Looking up the ECOSTRESS tile…";
+    showViewerImage(null);
+    var ticket = viewerSeq;
+    fetch("/api/eco/browse?id=" + encodeURIComponent(swathId) +
+          "&lon=" + latlng.lng.toFixed(6) + "&lat=" + latlng.lat.toFixed(6))
+      .then(function (r) {
+        if (r.status === 404) { return { missing: true }; }
+        if (!r.ok) { throw new Error("HTTP " + r.status); }
+        return r.json();
+      })
+      .then(function (b) {
+        if (ticket !== viewerSeq) { return; }
+        if (b.missing) {
+          el("viewerMeta").textContent = "No tiled ECOSTRESS image covers this point for that swath.";
+          return;
+        }
+        var start = b.start || "";
+        var links = b.browse || {};
+        el("viewerMeta").innerHTML =
+          "ECOSTRESS · " + start.slice(0, 10) + " " + start.slice(11, 16) + " UTC · " +
+          (b.daynight || "?").toLowerCase() + " · tile " + b.tile + " · land surface temperature" +
+          (links.lst ? ' · <a href="' + links.lst + '" target="_blank" rel="noopener">open in a new tab</a>' : "") +
+          (links.qc ? ' · <a href="' + links.qc + '" target="_blank" rel="noopener">QC</a>' : "");
+        showViewerImage(links.lst || null);
+      })
+      .catch(function () {
+        if (ticket !== viewerSeq) { return; }
+        el("viewerMeta").textContent = "ECOSTRESS lookup failed.";
+        showViewerImage(null);
+      });
   }
 
   function closeViewer() {
+    viewerSeq++;
     el("viewer").hidden = true;
   }
 
@@ -950,6 +996,12 @@
         if (!g) { return; }
         event.preventDefault();
         openViewer(g);
+      });
+    });
+    Array.prototype.forEach.call(node.querySelectorAll("a.browse-eco"), function (link) {
+      link.addEventListener("click", function (event) {
+        event.preventDefault();
+        openEcoViewer(link.dataset.id, popup.getLatLng());
       });
     });
   }
@@ -1032,7 +1084,8 @@
                (g.browse ? ' <a href="' + g.browse + '" class="browse-scene" data-id="' + g.id + '">browse</a>' : "") +
                (g.data ? ' <a href="' + g.data + '" target="_blank" rel="noopener">data</a>' : "") +
                (g.eco && g.eco.length && state.coincide && Math.abs(g.eco[0].dt) <= coincideSeconds()
-                 ? ' <span class="tag">ECOSTRESS ' + formatDt(g.eco[0].dt) + "</span>" : "") +
+                 ? ' <span class="tag">ECOSTRESS ' + formatDt(g.eco[0].dt) + "</span>" +
+                   ' <a href="#" class="browse-eco" data-id="' + g.eco[0].id + '">browse</a>' : "") +
                (g.hls
                  ? ' <span class="tag">HLS ' + g.hls.sensor + " " + formatDays(g.hls.dt) + ", " +
                    (g.hls.cloud === null ? "?" : g.hls.cloud.toFixed(0)) + "% cloud</span>"
@@ -1051,7 +1104,8 @@
       });
       ecoBody += renderList(sortedE, 10, function (s) {
         return '<li><span class="when">' + s.start.slice(0, 10) + " " + s.start.slice(11, 16) + "</span>" +
-               "<span>" + (s.daynight || "?").toLowerCase() + "</span></li>";
+               "<span>" + (s.daynight || "?").toLowerCase() + "</span>" +
+               ' <a href="#" class="browse-eco" data-id="' + s.id + '">browse</a></li>';
       });
     }
     html += foldable("eco", "ECOSTRESS swaths covering this point: " + swaths.length, ecoBody);
