@@ -181,3 +181,16 @@ label .note { font-weight: 450; }
 
 .leaflet-rivers-pane { pointer-events: none; }
 .river-tooltip { font-size: 11px; padding: 2px 6px; }
+
+/* Sidebar groups by data source. */
+details.group { border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+details.group > summary { cursor: pointer; font-weight: 600; list-style: none; padding: 8px 0; }
+details.group > summary::-webkit-details-marker { display: none; }
+details.group > summary::before {
+  content: "▸"; display: inline-block; width: 12px; color: var(--muted); transition: transform 0.12s;
+}
+details.group[open] > summary::before { transform: rotate(90deg); }
+details.group > summary .on { color: var(--muted); font-weight: 450; }
+details.group[open] > summary .on { display: none; }
+details.group > .controls:last-child { border-bottom: 0; margin-bottom: 0; }
+.pair { display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: center; }
