@@ -2,7 +2,9 @@
 
 import argparse
 import datetime
+import http.client
 import json
+import math
 import re
 import sys
 import threading
@@ -13,7 +15,7 @@ from urllib.parse import parse_qs, urlparse
 
 import numpy as np
 
-from viz import basins, coincidence, color, emit, hls, naming, paths, rasters
+from viz import basins, coincidence, color, eco_browse, emit, hls, naming, paths, rasters
 
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -352,6 +354,9 @@ class Handler(BaseHTTPRequestHandler):
             if route == "/api/hls/counts":
                 return self._handle_hls_counts(query)
 
+            if route == "/api/eco/browse":
+                return self._handle_eco_browse(query)
+
             if route == "/api/point":
                 return self._handle_point(query)
 
@@ -448,6 +453,29 @@ class Handler(BaseHTTPRequestHandler):
             return self._fail(HTTPStatus.SERVICE_UNAVAILABLE, HLS_BUSY)
         # counts is None only if the store vanished between the two reads.
         self._send(json.dumps({"counts": counts or {}}).encode(), CONTENT_TYPES[".json"])
+
+    def _handle_eco_browse(self, query):
+        try:
+            swath_id = query["id"][0]
+            lon = float(query["lon"][0])
+            lat = float(query["lat"][0])
+        except (KeyError, ValueError):
+            return self._fail(HTTPStatus.BAD_REQUEST, "required: id, lon, lat (numbers)")
+        if not (math.isfinite(lon) and math.isfinite(lat)
+                and -180 <= lon <= 180 and -90 <= lat <= 90):
+            return self._fail(HTTPStatus.BAD_REQUEST, "lon/lat out of range")
+        try:
+            eco_browse.parse_swath_id(swath_id)
+        except ValueError as exc:
+            return self._fail(HTTPStatus.BAD_REQUEST, str(exc))
+        try:
+            found = eco_browse.lookup(swath_id, lon, lat)
+        except (OSError, http.client.HTTPException, ValueError, KeyError, IndexError):
+            return self._fail(HTTPStatus.BAD_GATEWAY, "CMR lookup failed")
+        if found is None:
+            return self._fail(HTTPStatus.NOT_FOUND,
+                              "no tiled ECOSTRESS image covers this point for that swath")
+        self._send(json.dumps(found).encode(), CONTENT_TYPES[".json"])
 
     def _handle_point(self, query):
         required = ("lon", "lat", "crop", "year", "cdl_year")
