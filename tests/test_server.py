@@ -26,7 +26,7 @@ class ServerTestCase(unittest.TestCase):
         cls.tmp = Path(tempfile.mkdtemp())
         cls._saved = (paths.DATA, paths.CPC_DATA, paths.CDL_DATA, paths.MASK_DATA,
                       paths.CATALOG, paths.TILE_CACHE, paths.EMIT_FOOTPRINTS, paths.ECO_FOOTPRINTS, paths.BASINS2, paths.BASINS4,
-                      paths.RIVERS6, paths.RIVERS4, paths.RIVERS_NAMED, paths.HLS_DB)
+                      paths.RIVERS6, paths.RIVERS4, paths.HLS_DB)
 
         paths.DATA = cls.tmp / "data"
         paths.CPC_DATA = paths.DATA / "cpc"
@@ -40,7 +40,6 @@ class ServerTestCase(unittest.TestCase):
         paths.BASINS4 = cls.tmp / "vendor" / "basins4.geojson"
         paths.RIVERS6 = cls.tmp / "vendor" / "rivers6.geojson"
         paths.RIVERS4 = cls.tmp / "vendor" / "rivers4.geojson"
-        paths.RIVERS_NAMED = cls.tmp / "vendor" / "rivers_named.geojson"
         paths.HLS_DB = paths.DATA / "hls" / "hls.sqlite"
 
         (paths.CPC_DATA / "corn" / "cond").mkdir(parents=True)
@@ -147,7 +146,7 @@ class ServerTestCase(unittest.TestCase):
         cls.server.server_close()
         (paths.DATA, paths.CPC_DATA, paths.CDL_DATA, paths.MASK_DATA,
          paths.CATALOG, paths.TILE_CACHE, paths.EMIT_FOOTPRINTS, paths.ECO_FOOTPRINTS, paths.BASINS2, paths.BASINS4,
-         paths.RIVERS6, paths.RIVERS4, paths.RIVERS_NAMED, paths.HLS_DB) = cls._saved
+         paths.RIVERS6, paths.RIVERS4, paths.HLS_DB) = cls._saved
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
     def get(self, path):
@@ -654,31 +653,42 @@ class TestInterfaceAssets(ServerTestCase):
         _, _, index = self.get("/")
         html = index.decode()
         self.assertIn('id="rivers"', html)
-        self.assertIn('id="riversNamed"', html)
+        self.assertNotIn('id="riversNamed"', html)
         _, _, app = self.get("/static/app.js")
         text = app.decode()
         self.assertIn("/static/vendor/rivers6.geojson", text)
         self.assertIn("/static/vendor/rivers4.geojson", text)
-        self.assertIn("/static/vendor/rivers_named.geojson", text)
+        self.assertNotIn("rivers_named.geojson", text)
+        self.assertNotIn("rivers-named", text)
         self.assertIn('map.createPane("rivers")', text)
-        self.assertIn('map.createPane("rivers-named")', text)
         rivers_pane = text.index('map.getPane("rivers")')
         self.assertIn("457", text[rivers_pane:rivers_pane + 80])
-        named_pane = text.index('map.getPane("rivers-named")')
-        self.assertIn("459", text[named_pane:named_pane + 80])
         self.assertIn('L.canvas({ pane: "rivers" })', text)
-        self.assertIn('L.svg({ pane: "rivers-named" })', text)
         self.assertIn("RIVER_DETAIL_ZOOM = 7", text)
-        self.assertIn("riverLoading[key]", text)
-        self.assertIn("sticky: true", text)
-        self.assertIn("interactive: false", text[text.index("function loadRivers"):text.index("function syncRivers")])
         self.assertIn("map.getZoom() >= RIVER_DETAIL_ZOOM", text)
         self.assertIn("key === 6 || detailWanted", text)
+        self.assertIn("riverLoading[key]", text)
+        self.assertIn("interactive: false", text[text.index("function loadRivers"):text.index("function syncRivers")])
+        self.assertIn('RIVER_COLOUR = "#00838f"', text)
+        self.assertIn("RIVER_WEIGHTS = { 4: 0.6, 5: 1.0, 6: 1.4, 7: 1.8, 8: 2.2, 9: 2.6 }", text)
+        self.assertIn("RIVER_HOVER_PX = 6", text)
+        self.assertIn("RIVER_HOVER_MS = 50", text)
+        self.assertIn('map.on("mousemove", onRiverHover)', text)
+        self.assertIn('map.on("dragstart", closeRiverTip)', text)
+        hover = text[text.index("function onRiverHover"):]
+        hover = hover[:hover.index("function ", 10)]
+        self.assertIn("map.dragging && map.dragging.moving && map.dragging.moving()", hover)
+        self.assertIn('" m³/s"', text)
+        self.assertIn('" · " : "") + "order " + hit.ord + " · " + formatDischarge(hit.dis)', text)
+        self.assertIn('toLocaleString("en-US")', text)
+        start = text.index("function nearestRiverPart")
+        end = text.index("\n  function ", start)
+        self.assertIn("map.hasLayer(layer)", text[start:end])
         _, _, css = self.get("/static/style.css")
         css_text = css.decode()
         self.assertIn(".leaflet-rivers-pane", css_text)
-        self.assertIn(".leaflet-rivers-named-pane", css_text)
         self.assertIn(".river-tooltip", css_text)
+        self.assertNotIn(".leaflet-rivers-named-pane", css_text)
 
     def test_ecostress_plus_hls_coincidence_mark(self):
         _, _, index = self.get("/")

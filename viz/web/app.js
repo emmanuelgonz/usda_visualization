@@ -147,32 +147,130 @@
   var basinLayers = { 2: null, 4: null };     // {lines, labels} once loaded
   var basinLoading = { 2: false, 4: false };  // a fetch is in flight; toggling again must not start another
 
-  // River network (HydroRIVERS, by Strahler order band) and named rivers (Natural Earth).
+  // River network (HydroRIVERS by Strahler order band, named from Natural Earth on hover)
   map.createPane("rivers");
   map.getPane("rivers").style.zIndex = 457;         // above the footprints, below the basin outlines
-  map.createPane("rivers-named");
-  map.getPane("rivers-named").style.zIndex = 459;   // above the basins, below the state lines; the
-  // pane itself is pointer-transparent (style.css), so only the SVG river strokes are hoverable
 
   var RIVER_DETAIL_ZOOM = 7;                      // orders 4 and 5 show from this zoom up
   var RIVERS = {
     6: { file: "/static/vendor/rivers6.geojson" },
-    4: { file: "/static/vendor/rivers4.geojson" },
-    named: { file: "/static/vendor/rivers_named.geojson" }
+    4: { file: "/static/vendor/rivers4.geojson" }
   };
-  var riverLayers = { 6: null, 4: null, named: null };
-  var riverLoading = { 6: false, 4: false, named: false };
+  var riverLayers = { 6: null, 4: null };
+  var riverLoading = { 6: false, 4: false };
   var riverRenderer = L.canvas({ pane: "rivers" });
-  var riverNamedRenderer = L.svg({ pane: "rivers-named" });
+
+  var RIVER_COLOUR = "#00838f";
+  var RIVER_WEIGHTS = { 4: 0.6, 5: 1.0, 6: 1.4, 7: 1.8, 8: 2.2, 9: 2.6 };
+  var RIVER_HOVER_PX = 6;                         // pointer distance that still counts as on a river
+  var RIVER_HOVER_MS = 50;                        // minimum time between hover searches
+  var RIVER_INDEX_CELL = 0.1;                     // grid cell of the hover index, in degrees
+  var riverIndex = { 6: null, 4: null };          // {cells, geo} per band, built after the fetch
+  var riverTip = null;
+  var riverHoverTimer = null;
+  var riverHoverLatLng = null;                    // latest cursor position, read when the timer fires
 
   function riverNetworkStyle(feature) {
     var ord = feature.properties.ord;
-    var weight = ord >= 6 ? 1.6 : (ord === 5 ? 1.0 : 0.6);
-    return { color: "#3b7dd8", opacity: 0.9, weight: weight };
+    return { color: RIVER_COLOUR, opacity: 0.9, weight: RIVER_WEIGHTS[Math.min(ord, 9)] || 0.6 };
   }
 
-  function riverNamedStyle() {
-    return { color: "#1f5fbf", opacity: 0.95, weight: 1.4 };
+  function buildRiverIndex(geo) {
+    var cells = {};
+    geo.features.forEach(function (feature, fi) {
+      feature.geometry.coordinates.forEach(function (part, pi) {
+        var minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        part.forEach(function (pt) {
+          if (pt[0] < minX) { minX = pt[0]; }
+          if (pt[0] > maxX) { maxX = pt[0]; }
+          if (pt[1] < minY) { minY = pt[1]; }
+          if (pt[1] > maxY) { maxY = pt[1]; }
+        });
+        var cx0 = Math.floor(minX / RIVER_INDEX_CELL), cx1 = Math.floor(maxX / RIVER_INDEX_CELL);
+        var cy0 = Math.floor(minY / RIVER_INDEX_CELL), cy1 = Math.floor(maxY / RIVER_INDEX_CELL);
+        for (var cx = cx0; cx <= cx1; cx++) {
+          for (var cy = cy0; cy <= cy1; cy++) {
+            var id = cx + ":" + cy;
+            (cells[id] || (cells[id] = [])).push([fi, pi]);
+          }
+        }
+      });
+    });
+    return { cells: cells, geo: geo };
+  }
+
+  function segmentDistance(px, py, ax, ay, bx, by) {
+    var dx = bx - ax, dy = by - ay;
+    var len2 = dx * dx + dy * dy;
+    var t = len2 > 0 ? ((px - ax) * dx + (py - ay) * dy) / len2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    var ex = px - (ax + t * dx), ey = py - (ay + t * dy);
+    return Math.sqrt(ex * ex + ey * ey);
+  }
+
+  function nearestRiverPart(latlng) {
+    var cp = map.latLngToContainerPoint(latlng);
+    var limit = Math.abs(map.containerPointToLatLng(L.point(cp.x, cp.y - RIVER_HOVER_PX)).lat - latlng.lat);
+    var k = Math.cos(latlng.lat * Math.PI / 180);
+    var px = latlng.lng * k, py = latlng.lat;
+    var cx = Math.floor(latlng.lng / RIVER_INDEX_CELL), cy = Math.floor(latlng.lat / RIVER_INDEX_CELL);
+    var rx = Math.ceil(limit / k / RIVER_INDEX_CELL), ry = Math.ceil(limit / RIVER_INDEX_CELL);  // cells within reach
+    var best = null;
+    [6, 4].forEach(function (key) {
+      var idx = riverIndex[key];
+      var layer = riverLayers[key];
+      if (!idx || !layer || !map.hasLayer(layer)) { return; }
+      for (var ox = -rx; ox <= rx; ox++) {
+        for (var oy = -ry; oy <= ry; oy++) {
+          var list = idx.cells[(cx + ox) + ":" + (cy + oy)];
+          if (!list) { continue; }
+          list.forEach(function (ref) {
+            var feature = idx.geo.features[ref[0]];
+            var part = feature.geometry.coordinates[ref[1]];
+            for (var i = 1; i < part.length; i++) {
+              var d = segmentDistance(px, py, part[i - 1][0] * k, part[i - 1][1], part[i][0] * k, part[i][1]);
+              if (d <= limit && (!best || d < best.d)) {
+                var props = feature.properties;
+                best = { ord: props.ord, dis: props.dis[ref[1]], name: props.name[ref[1]], d: d };
+              }
+            }
+          });
+        }
+      }
+    });
+    return best;
+  }
+
+  function formatDischarge(q) {
+    return q < 10 ? q.toFixed(1) : Math.round(q).toLocaleString("en-US");
+  }
+
+  function riverTipText(hit) {
+    return (hit.name ? hit.name + " · " : "") + "order " + hit.ord + " · " + formatDischarge(hit.dis) + " m³/s";
+  }
+
+  function closeRiverTip() {
+    clearTimeout(riverHoverTimer);
+    riverHoverTimer = null;
+    if (riverTip && map.hasLayer(riverTip)) { map.closeTooltip(riverTip); }
+  }
+
+  function onRiverHover(e) {
+    riverHoverLatLng = e.latlng;
+    if (map.dragging && map.dragging.moving && map.dragging.moving()) { return; }
+    if (riverHoverTimer) { return; }
+    riverHoverTimer = setTimeout(function () {
+      riverHoverTimer = null;
+      if (!el("rivers").checked) { closeRiverTip(); return; }
+      var hit = nearestRiverPart(riverHoverLatLng);
+      if (!hit) { closeRiverTip(); return; }
+      if (!riverTip) {
+        riverTip = L.tooltip({ className: "river-tooltip", direction: "top", offset: [0, -8], sticky: false });
+      }
+      riverTip.setLatLng(riverHoverLatLng);
+      riverTip.setContent(riverTipText(hit));
+      if (!map.hasLayer(riverTip)) { riverTip.openOn(map); }
+    }, RIVER_HOVER_MS);
   }
 
   var stateLines = null;
@@ -371,18 +469,8 @@
     riverLoading[key] = true;
     var spec = RIVERS[key];
     fetch(spec.file).then(function (r) { return r.json(); }).then(function (geo) {
-      var layer;
-      if (key === "named") {
-        layer = L.geoJSON(geo, {
-          pane: "rivers-named", renderer: riverNamedRenderer, interactive: true, style: riverNamedStyle,
-          onEachFeature: function (feature, featureLayer) {
-            featureLayer.bindTooltip(feature.properties.name, { sticky: true, direction: "top", className: "river-tooltip" });
-          }
-        });
-      } else {
-        layer = L.geoJSON(geo, { pane: "rivers", renderer: riverRenderer, interactive: false, style: riverNetworkStyle });
-      }
-      riverLayers[key] = layer;
+      riverIndex[key] = buildRiverIndex(geo);
+      riverLayers[key] = L.geoJSON(geo, { pane: "rivers", renderer: riverRenderer, interactive: false, style: riverNetworkStyle });
       riverLoading[key] = false;
       syncRivers();
     }).catch(function () { riverLoading[key] = false; /* the rivers are optional; run ./run.sh vendor to add them */ });
@@ -391,6 +479,7 @@
   function syncRivers() {
     var networkOn = el("rivers").checked;
     var detailWanted = map.getZoom() >= RIVER_DETAIL_ZOOM;
+    closeRiverTip();
     [6, 4].forEach(function (key) {
       var on = networkOn && (key === 6 || detailWanted);
       var layer = riverLayers[key];
@@ -399,12 +488,6 @@
       if (on && !map.hasLayer(layer)) { layer.addTo(map); }
       if (!on && map.hasLayer(layer)) { map.removeLayer(layer); }
     });
-    var namedOn = el("riversNamed").checked;
-    var named = riverLayers.named;
-    if (namedOn && !named) { loadRivers("named"); return; }
-    if (!named) { return; }
-    if (namedOn && !map.hasLayer(named)) { named.addTo(map); }
-    if (!namedOn && map.hasLayer(named)) { map.removeLayer(named); }
   }
 
   function syncStates() {
@@ -1101,8 +1184,10 @@
     el("basins4").addEventListener("change", syncBasins);
     map.on("zoomend", syncBasins);
     el("rivers").addEventListener("change", syncRivers);
-    el("riversNamed").addEventListener("change", syncRivers);
     map.on("zoomend", syncRivers);
+    map.on("mousemove", onRiverHover);
+    map.on("mouseout", closeRiverTip);
+    map.on("dragstart", closeRiverTip);
     el("emit").addEventListener("change", function (e) { state.emit = e.target.checked; syncEmit(); });
     el("emitCloud").addEventListener("input", function (e) {
       state.emitCloud = Number(e.target.value); el("emitCloudOut").textContent = e.target.value + "%"; syncEmit();
