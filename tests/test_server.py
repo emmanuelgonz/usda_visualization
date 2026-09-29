@@ -790,6 +790,14 @@ class TestInterfaceAssets(ServerTestCase):
         _, _, css = self.get("/static/style.css")
         self.assertIn("#map { position: absolute; inset: 0 340px 0 0; background: #fff;", css.decode())
 
+    def test_cpc_layer_is_toggleable(self):
+        _, _, index = self.get("/")
+        self.assertIn('id="cpc"', index.decode())
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        self.assertIn("state.cpcVisible", text[text.index("function drawCpc"):text.index("function applyMode")])
+        self.assertIn("state.cpcVisible", text[text.index("function applyMode"):text.index("function positionSwipe")])
+
     def test_app_appends_the_server_token_to_every_tile_url(self):
         _, _, body = self.get("/static/app.js")
         text = body.decode()

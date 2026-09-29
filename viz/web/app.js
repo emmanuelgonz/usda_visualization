@@ -12,6 +12,7 @@
     mode: "overlay",
     mask: false,
     cdlVisible: true,
+    cpcVisible: true,
     cdlOpacity: 1.0,
     dim: "white",
     opacity: 0.7,
@@ -334,6 +335,13 @@
   }
 
   function drawCpc() {
+    // Visibility is checked first so every refresh path respects the box; applyMode
+    // keeps the swipe handle consistent with the hidden layer.
+    if (!state.cpcVisible) {
+      if (cpcLayer) { map.removeLayer(cpcLayer); cpcLayer = null; }
+      applyMode();
+      return;
+    }
     if (state.week === null || state.week === undefined) {
       if (cpcLayer) { map.removeLayer(cpcLayer); cpcLayer = null; }
       return;
@@ -358,7 +366,9 @@
 
   function applyMode() {
     var pane = map.getPane("cpc");
-    if (state.mode === "swipe") {
+    // A hidden CPC layer leaves nothing to reveal, so the handle follows the overlay branch.
+    var swiping = state.mode === "swipe" && state.cpcVisible;
+    if (swiping) {
       if (!swipeHandle) {
         swipeHandle = document.createElement("div");
         swipeHandle.id = "swipeHandle";
@@ -1166,6 +1176,9 @@
       state.opacity = Number(e.target.value) / 100;
       el("opacityOut").textContent = e.target.value + "%";
       if (cpcLayer && state.mode === "overlay") { cpcLayer.setOpacity(state.opacity); }
+    });
+    el("cpc").addEventListener("change", function (e) {
+      state.cpcVisible = e.target.checked; drawCpc();
     });
     el("cdl").addEventListener("change", function (e) {
       state.cdlVisible = e.target.checked; drawCdl();
