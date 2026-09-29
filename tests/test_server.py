@@ -1,3 +1,4 @@
+import http.client
 import json
 import re
 import shutil
@@ -9,9 +10,10 @@ import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
+from unittest import mock
 
 from tests import fixtures
-from viz import paths, tileserver
+from viz import eco_browse, paths, tileserver
 
 
 def _png_size(blob):
@@ -560,6 +562,76 @@ class TestHlsRoutes(ServerTestCase):
             self.assertFalse(catalog["hls_busy"])   # absent is not busy
         finally:
             moved.rename(paths.HLS_DB)
+
+
+class TestEcoBrowseRoute(ServerTestCase):
+    SWATH = "ECOv002_L2_LSTE_39607_006_20250701T061657_0713_01"
+    TILED = "ECOv002_L2T_LSTE_39607_006_15TUF_20250701T061657_0713_01"
+    HREF = "https://data.lpdaac.earthdatacloud.nasa.gov/lp-prod-public/" + TILED
+
+    def setUp(self):
+        eco_browse.clear_cache()
+
+    def url(self, swath=None, extra="&lon=-93.5&lat=42.25"):
+        return f"/api/eco/browse?id={swath or self.SWATH}{extra}"
+
+    def page(self):
+        rel = "http://esipfed.org/ns/fedsearch/1.1/browse#"
+        return [{"time_start": "2025-07-01T06:16:57.000Z", "day_night_flag": "Night",
+                 "title": self.TILED,
+                 "producer_granule_id": self.TILED,
+                 "links": [{"rel": rel, "href": f"{self.HREF}_LST.jpeg"},
+                           {"rel": rel, "href": f"s3://x/{self.TILED}_LST.jpeg"},
+                           {"rel": rel, "href": f"{self.HREF}_QC.jpeg"}]}]
+
+    def test_returns_the_tiled_browse_links(self):
+        with mock.patch("viz.eco_browse.cmr.fetch_page", return_value=self.page()):
+            status, ctype, body = self.get(self.url())
+        self.assertEqual((status, ctype), (200, "application/json"))
+        self.assertEqual(json.loads(body), {
+            "id": self.TILED, "tile": "15TUF", "start": "2025-07-01T06:16:57.000Z",
+            "daynight": "Night",
+            "browse": {"lst": f"{self.HREF}_LST.jpeg", "qc": f"{self.HREF}_QC.jpeg"}})
+
+    def test_empty_page_is_404(self):
+        with mock.patch("viz.eco_browse.cmr.fetch_page", return_value=[]):
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                self.get(self.url())
+        self.assertEqual(ctx.exception.code, 404)
+
+    def test_bad_parameters_are_400(self):
+        with mock.patch("viz.eco_browse.cmr.fetch_page", side_effect=AssertionError("no network")) as fetch:
+            for path in (self.url("garbage"), self.url(extra="&lat=42.25"),
+                         self.url(extra="&lon=abc&lat=42.25"), self.url(extra="&lon=-93.5"),
+                         self.url(extra="&lon=nan&lat=42.25"), self.url(extra="&lon=-93.5&lat=nan"),
+                         self.url(extra="&lon=inf&lat=42.25"), self.url(extra="&lon=-93.5&lat=-inf"),
+                         self.url(extra="&lon=500&lat=42.25"), self.url(extra="&lon=-93.5&lat=91")):
+                with self.assertRaises(urllib.error.HTTPError) as ctx:
+                    self.get(path)
+                self.assertEqual(ctx.exception.code, 400, path)
+            fetch.assert_not_called()
+
+    def test_short_tiled_id_in_cmr_reply_is_502(self):
+        page = self.page()
+        page[0]["producer_granule_id"] = page[0]["title"] = "ECOv002_L2T_LSTE_short"
+        with mock.patch("viz.eco_browse.cmr.fetch_page", return_value=page):
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                self.get(self.url())
+        self.assertEqual(ctx.exception.code, 502)
+
+    def test_unreachable_cmr_is_502(self):
+        with mock.patch("viz.eco_browse.cmr.fetch_page", side_effect=OSError("down")):
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                self.get(self.url())
+        self.assertEqual(ctx.exception.code, 502)
+
+    def test_malformed_or_truncated_cmr_reply_is_502(self):
+        for exc in (ValueError("bad json"), KeyError("feed"), http.client.HTTPException("cut short")):
+            eco_browse.clear_cache()
+            with mock.patch("viz.eco_browse.cmr.fetch_page", side_effect=exc):
+                with self.assertRaises(urllib.error.HTTPError) as ctx:
+                    self.get(self.url())
+            self.assertEqual(ctx.exception.code, 502, repr(exc))
 
 
 class TestHlsBusyStore(ServerTestCase):
