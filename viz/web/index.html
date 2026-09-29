@@ -22,48 +22,71 @@
 <aside id="panel">
   <h1>CPC over CDL</h1>
 
-  <section class="controls">
-    <label>Crop
-      <select id="crop"></select>
-    </label>
-    <label>Variable
-      <select id="var"></select>
-    </label>
-    <label>CPC year
-      <select id="year"></select>
-    </label>
-    <label>CDL year
-      <select id="cdlYear"></select>
-    </label>
-  </section>
+  <details class="group" data-group="cpc" open>
+    <summary>Crop progress (CPC)<span class="on"></span></summary>
+    <section class="controls">
+      <label>Crop
+        <select id="crop"></select>
+      </label>
+      <label>Variable
+        <select id="var"></select>
+      </label>
+      <label>CPC year
+        <select id="year"></select>
+      </label>
+    </section>
 
-  <section class="controls">
-    <label>Week <output id="weekOut"></output>
-      <input type="range" id="week" min="0" max="0" step="1">
-    </label>
-    <div class="row">
-      <button id="play" type="button">Play</button>
-      <button id="prev" type="button">&larr;</button>
-      <button id="next" type="button">&rarr;</button>
-    </div>
-  </section>
+    <section class="controls">
+      <label>Week <output id="weekOut"></output>
+        <input type="range" id="week" min="0" max="0" step="1">
+      </label>
+      <div class="row">
+        <button id="play" type="button">Play</button>
+        <button id="prev" type="button">&larr;</button>
+        <button id="next" type="button">&rarr;</button>
+      </div>
+    </section>
 
-  <section class="controls">
-    <fieldset>
-      <legend>View</legend>
-      <label class="inline"><input type="radio" name="mode" value="overlay" checked> Overlay</label>
-      <label class="inline"><input type="radio" name="mode" value="swipe"> Swipe</label>
-    </fieldset>
-    <label class="inline"><input type="checkbox" id="cdl" checked> CDL base layer</label>
-    <label class="inline"><input type="checkbox" id="mask"> Mask to crop extent</label>
+    <section class="controls">
+      <div class="pair">
+        <label class="inline"><input type="checkbox" id="cpc" checked> CPC layer</label>
+        <label>CPC opacity <output id="opacityOut">70%</output>
+          <input type="range" id="opacity" min="0" max="100" step="5" value="70">
+        </label>
+      </div>
+      <fieldset>
+        <legend>Display</legend>
+        <label class="inline"><input type="radio" name="mode" value="overlay" checked> Overlay</label>
+        <label class="inline"><input type="radio" name="mode" value="swipe"> Swipe</label>
+      </fieldset>
+    </section>
+
+    <section id="legend"></section>
+  </details>
+
+  <details class="group" data-group="cdl" open>
+    <summary>Cropland (CDL)<span class="on"></span></summary>
+    <section class="controls">
+      <label>CDL year
+        <select id="cdlYear"></select>
+      </label>
+      <div class="pair">
+        <label class="inline"><input type="checkbox" id="cdl" checked> CDL base layer</label>
+        <label>CDL opacity <output id="cdlOpacityOut">100%</output>
+          <input type="range" id="cdlOpacity" min="0" max="100" step="5" value="100">
+        </label>
+      </div>
+      <label class="inline"><input type="checkbox" id="mask"> Mask to crop extent</label>
     <div class="inline sub" id="dimRow">Off-crop:
       <label class="inline"><input type="radio" name="dim" value="white" checked> White</label>
       <label class="inline"><input type="radio" name="dim" value="grey"> Grey</label>
     </div>
-    <label class="inline"><input type="checkbox" id="states" checked> State boundaries</label>
-    <label class="inline"><input type="checkbox" id="basins2"> River basins (HUC2 regions)</label>
-    <label class="inline"><input type="checkbox" id="basins4"> Subbasins (HUC4 subregions)</label>
-    <label class="inline"><input type="checkbox" id="rivers"> Rivers (HydroRIVERS network)</label>
+    </section>
+  </details>
+
+  <details class="group" data-group="imagery">
+    <summary>Satellite imagery<span class="on"></span></summary>
+    <section class="controls">
     <label>Time window ±days <output id="timeWindowOut">7</output>
       <input type="range" id="timeWindow" min="0" max="30" step="1" value="7">
       <span class="note">Around the selected CPC week's Sunday; drives the EMIT highlight and the HLS week window.</span>
@@ -108,16 +131,20 @@
       </div>
       <div id="hlsLegend"></div>
     </div>
-    <label>CDL opacity <output id="cdlOpacityOut">100%</output>
-      <input type="range" id="cdlOpacity" min="0" max="100" step="5" value="100">
-    </label>
-    <label>CPC opacity <output id="opacityOut">70%</output>
-      <input type="range" id="opacity" min="0" max="100" step="5" value="70">
-    </label>
-  </section>
+    </section>
+    <p id="pairing" class="note"></p>
+  </details>
 
-  <section id="legend"></section>
-  <p id="pairing" class="note"></p>
+  <details class="group" data-group="reference">
+    <summary>Reference layers<span class="on"></span></summary>
+    <section class="controls">
+    <label class="inline"><input type="checkbox" id="states" checked> State boundaries</label>
+    <label class="inline"><input type="checkbox" id="basins2"> River basins (HUC2 regions)</label>
+    <label class="inline"><input type="checkbox" id="basins4"> Subbasins (HUC4 subregions)</label>
+    <label class="inline"><input type="checkbox" id="rivers"> Rivers (HydroRIVERS network)</label>
+    </section>
+  </details>
+
   <p class="note">Click the map to inspect a cell.</p>
 </aside>
 

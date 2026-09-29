@@ -12,6 +12,7 @@
     mode: "overlay",
     mask: false,
     cdlVisible: true,
+    cpcVisible: true,
     cdlOpacity: 1.0,
     dim: "white",
     opacity: 0.7,
@@ -334,6 +335,13 @@
   }
 
   function drawCpc() {
+    // Visibility is checked first so every refresh path respects the box; applyMode
+    // keeps the swipe handle consistent with the hidden layer.
+    if (!state.cpcVisible) {
+      if (cpcLayer) { map.removeLayer(cpcLayer); cpcLayer = null; }
+      applyMode();
+      return;
+    }
     if (state.week === null || state.week === undefined) {
       if (cpcLayer) { map.removeLayer(cpcLayer); cpcLayer = null; }
       return;
@@ -358,7 +366,9 @@
 
   function applyMode() {
     var pane = map.getPane("cpc");
-    if (state.mode === "swipe") {
+    // A hidden CPC layer leaves nothing to reveal, so the handle follows the overlay branch.
+    var swiping = state.mode === "swipe" && state.cpcVisible;
+    if (swiping) {
       if (!swipeHandle) {
         swipeHandle = document.createElement("div");
         swipeHandle.id = "swipeHandle";
@@ -1167,6 +1177,9 @@
       el("opacityOut").textContent = e.target.value + "%";
       if (cpcLayer && state.mode === "overlay") { cpcLayer.setOpacity(state.opacity); }
     });
+    el("cpc").addEventListener("change", function (e) {
+      state.cpcVisible = e.target.checked; drawCpc();
+    });
     el("cdl").addEventListener("change", function (e) {
       state.cdlVisible = e.target.checked; drawCdl();
     });
@@ -1269,6 +1282,42 @@
 
   }
 
+  // Sidebar groups: fold state persists per browser; a collapsed group tags its active layers.
+  function updateGroupTags() {
+    var on = function (id) { var box = el(id); return box && box.checked; };
+    var tags = {
+      cpc: on("cpc") ? [] : ["layer off"],
+      cdl: (on("cdl") ? [] : ["layer off"]).concat(on("mask") && !el("mask").disabled ? ["masked"] : []),
+      imagery: [["emit", "EMIT"], ["eco", "ECOSTRESS"], ["hls", "HLS"]]
+        .filter(function (p) { return on(p[0]); }).map(function (p) { return p[1]; }),
+      reference: [["states", "states"], ["basins2", "basins"], ["basins4", "subbasins"], ["rivers", "rivers"]]
+        .filter(function (p) { return on(p[0]); }).map(function (p) { return p[1]; })
+    };
+    Array.prototype.forEach.call(document.querySelectorAll("details.group"), function (details) {
+      var list = tags[details.dataset.group] || [];
+      details.querySelector("summary .on").textContent = list.length ? " \u00b7 " + list.join(", ") : "";
+    });
+  }
+
+  function wireGroups() {
+    var groups = Array.prototype.slice.call(document.querySelectorAll("details.group"));
+    var saved = {};
+    try { saved = JSON.parse(localStorage.getItem("sidebarOpen")) || {}; } catch (err) { saved = {}; }
+    groups.forEach(function (details) {
+      if (typeof saved[details.dataset.group] === "boolean") { details.open = saved[details.dataset.group]; }
+    });
+    groups.forEach(function (details) {
+      details.addEventListener("toggle", function () {
+        var now = {};
+        groups.forEach(function (d) { now[d.dataset.group] = d.open; });
+        try { localStorage.setItem("sidebarOpen", JSON.stringify(now)); } catch (err) { /* storage unavailable */ }
+        updateGroupTags();
+      });
+    });
+    el("panel").addEventListener("change", updateGroupTags);
+    updateGroupTags();
+  }
+
   fetch("/api/catalog").then(function (r) { return r.json(); }).then(function (catalog) {
     state.catalog = catalog;
     fillSelect(el("crop"), catalog.crops, state.crop);
@@ -1279,6 +1328,7 @@
     refresh();
     loadStates();
     drawEmitLegend(); drawEcoLegend(); drawHlsLegend(); syncEmit(); syncEco(); syncHls();
+    wireGroups();
   }).catch(function () {
     el("pairing").textContent = "Catalog request failed; is the server running? Reload to retry.";
   });

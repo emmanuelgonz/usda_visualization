@@ -790,6 +790,39 @@ class TestInterfaceAssets(ServerTestCase):
         _, _, css = self.get("/static/style.css")
         self.assertIn("#map { position: absolute; inset: 0 340px 0 0; background: #fff;", css.decode())
 
+    def test_cpc_layer_is_toggleable(self):
+        _, _, index = self.get("/")
+        self.assertIn('id="cpc"', index.decode())
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        self.assertIn("state.cpcVisible", text[text.index("function drawCpc"):text.index("function applyMode")])
+        self.assertIn("state.cpcVisible", text[text.index("function applyMode"):text.index("function positionSwipe")])
+
+    def test_sidebar_groups(self):
+        _, _, index = self.get("/")
+        html = index.decode()
+        heads = ['<details class="group" data-group="cpc" open>',
+                 '<details class="group" data-group="cdl" open>',
+                 '<details class="group" data-group="imagery">',
+                 '<details class="group" data-group="reference">']
+        pos = [html.index(h) for h in heads]
+        self.assertEqual(pos, sorted(pos))
+        cpc, cdl, imagery, reference = pos
+        for ident in ('id="cpc"', 'id="opacity"'):
+            self.assertTrue(cpc < html.index(ident) < cdl, ident)
+        for ident in ('id="cdlOpacity"', 'id="mask"'):
+            self.assertTrue(cdl < html.index(ident) < imagery, ident)
+        for ident in ('id="timeWindow"', 'id="emit"', 'id="eco"', 'id="hls"'):
+            self.assertTrue(imagery < html.index(ident) < reference, ident)
+        for ident in ('id="states"', 'id="rivers"'):
+            self.assertGreater(html.index(ident), reference)
+        _, _, app = self.get("/static/app.js")
+        text = app.decode()
+        self.assertIn("sidebarOpen", text)
+        self.assertIn("updateGroupTags", text)
+        _, _, css = self.get("/static/style.css")
+        self.assertIn("details.group[open] > summary .on", css.decode())
+
     def test_app_appends_the_server_token_to_every_tile_url(self):
         _, _, body = self.get("/static/app.js")
         text = body.decode()
