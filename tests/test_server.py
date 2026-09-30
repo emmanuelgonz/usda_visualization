@@ -721,6 +721,15 @@ class TestInterfaceAssets(ServerTestCase):
         _, _, css = self.get("/static/style.css")
         self.assertIn(".basin-label", css.decode())
 
+    def test_sidebar_inputs_are_not_restored_by_the_browser(self):
+        _, _, index = self.get("/")
+        html = index.decode()
+        panel = html[html.index('<aside id="panel">'):html.index("</aside>")]
+        tags = re.findall(r"<(?:input|select)\b[^>]*>", panel)
+        self.assertGreater(len(tags), 30)
+        for tag in tags:
+            self.assertIn('autocomplete="off"', tag)
+
     def test_river_layers(self):
         _, _, index = self.get("/")
         html = index.decode()
