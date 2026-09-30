@@ -82,6 +82,13 @@ case "${1:-}" in
       echo "note: no EMIT footprints yet; run ./run.sh footprints to pair them with HLS" >&2
     fi
     ;;
+  refresh)
+    # Refreshes the region catalog (data/catalog/<region>.sqlite) from CMR for
+    # every mission in viz/missions.json, or the named ones; frozen months are
+    # skipped, then tile outlines and swath coverage are computed. Network access.
+    shift
+    exec python3 -m viz.refresh "$@"
+    ;;
   serve)
     shift
     if [ ! -f viz/web/vendor/leaflet/leaflet.js ] || [ ! -f viz/web/vendor/states.geojson ]; then
@@ -108,5 +115,5 @@ case "${1:-}" in
   # -t . keeps the repo root as the top-level import dir so `from viz import ...`
   # and `from tests import fixtures` both resolve.
   test)    shift; exec python3 -m unittest discover -s tests -t . -v "$@" ;;
-  *) echo "usage: $0 {extract|prepare|vendor|footprints|emit|hls|serve|test} [args]" >&2; exit 2 ;;
+  *) echo "usage: $0 {extract|prepare|vendor|footprints|emit|hls|refresh|migrate|serve|test} [args]" >&2; exit 2 ;;
 esac
