@@ -102,6 +102,7 @@ def main(argv=None):
             else:
                 print(f"migrate: no {key} footprints at {source}; skipped", file=sys.stderr)
         refresh.finish_grids(cat, reg)
+        cat.analyze()
         for key in cat.missions_present():
             summary = cat.summary(key)
             print(f"{key}: {summary['count']} granules over {summary['months']} months in {cat.path}")

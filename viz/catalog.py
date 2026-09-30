@@ -7,9 +7,12 @@ design, section 3.
 """
 
 import json
+import os
 import sqlite3
+import threading
 from pathlib import Path
 
+from viz import spatial
 from viz.months import month_bounds
 
 BUSY = sqlite3.OperationalError
@@ -38,6 +41,8 @@ CREATE TABLE IF NOT EXISTS granules (
 CREATE INDEX IF NOT EXISTS granules_mission_start ON granules(mission, start);
 CREATE INDEX IF NOT EXISTS granules_mission_tile ON granules(mission, tile, start, cloud);
 CREATE INDEX IF NOT EXISTS granules_mission_lat ON granules(mission, minlat, maxlat, start);
+CREATE INDEX IF NOT EXISTS granules_mission_start_cloud_tile ON granules(mission, start, cloud, tile);
+CREATE INDEX IF NOT EXISTS granules_mission_sensor_start ON granules(mission, sensor, start, cloud, tile);
 CREATE TABLE IF NOT EXISTS tiles (
   grid TEXT NOT NULL,
   tile TEXT NOT NULL,
@@ -103,6 +108,11 @@ class Catalog:
         self.conn.execute("PRAGMA synchronous=OFF")
         self.conn.execute("PRAGMA journal_mode=MEMORY")
         self.conn.execute("PRAGMA cache_size=-262144")
+
+    def analyze(self):
+        """Record planner statistics so grouped range queries pick the covering start indexes."""
+        self.conn.execute("ANALYZE")
+        self.conn.commit()
 
     # --- writes ---
 
@@ -174,3 +184,45 @@ def open_read_only(path):
     if not path.is_file():
         raise FileNotFoundError(path)
     return Catalog(path, read_only=True)
+
+
+def is_busy(exc):
+    """True for the lock errors a refresh causes; any other OperationalError is a fault."""
+    text = str(exc)
+    return "locked" in text or "busy" in text
+
+
+_local = threading.local()
+
+
+def _drop_cached():
+    cached = getattr(_local, "entry", None)
+    _local.entry = None
+    if cached is not None:
+        cached[1][0].close()
+
+
+def catalog_for(path):
+    """(Catalog, {grid: RingIndex of tile ids}) for this thread, read-only, reopened when the file changes.
+
+    None when the file is absent. Raises the lock error when building the tile
+    indexes hits a refresh's write lock, after closing the connection.
+    """
+    path = Path(path)
+    if not path.is_file():
+        _drop_cached()
+        return None
+    key = (str(path), os.stat(path).st_mtime_ns)
+    cached = getattr(_local, "entry", None)
+    if cached is not None and cached[0] == key:
+        return cached[1]
+    _drop_cached()
+    cat = Catalog(path, read_only=True)
+    try:
+        grids = [r["grid"] for r in cat.conn.execute("SELECT DISTINCT grid FROM tiles ORDER BY grid")]
+        indexes = {grid: spatial.RingIndex((ring, tile) for tile, ring in cat.tile_rings(grid)) for grid in grids}
+    except Exception:
+        cat.close()
+        raise
+    _local.entry = (key, (cat, indexes))
+    return cat, indexes
