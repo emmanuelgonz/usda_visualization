@@ -9,6 +9,9 @@ case "${1:-}" in
   extract) shift; exec python3 -m viz.extract "$@" ;;
   prepare) shift; exec python3 -m viz.prepare "$@" ;;
   vendor)
+    # One trap removes every temp directory on exit, including after a failed download or Python step.
+    tmps=()
+    trap 'rm -rf ${tmps[@]+"${tmps[@]}"}' EXIT
     # The only network access in the whole project. Fetches Leaflet 1.9.4 from
     # cdnjs into viz/web/vendor/leaflet/, which is gitignored by design.
     mkdir -p viz/web/vendor/leaflet/images
@@ -23,6 +26,7 @@ case "${1:-}" in
     # 15 Hawaii, 60 American Samoa, 66 Guam, 69 Northern Marianas,
     # 72 Puerto Rico, 78 Virgin Islands are dropped.
     tmp=$(mktemp -d)
+    tmps+=("$tmp")
     curl -fsSL -o "$tmp/states.zip" https://www2.census.gov/geo/tiger/GENZ2023/shp/cb_2023_us_state_5m.zip
     python3 -m viz.vendor_states "/vsizip/$tmp/states.zip/cb_2023_us_state_5m.shp" viz/web/vendor/states.geojson
     rm -rf "$tmp"
@@ -30,6 +34,7 @@ case "${1:-}" in
     # Hydrologic units: USGS 1:250,000 HUC8 polygons (21 MB) dissolved into the
     # HUC2 regions and HUC4 subregions, named from USGS's huc_name.txt.
     tmp=$(mktemp -d)
+    tmps+=("$tmp")
     curl -fsSL -o "$tmp/huc250k_shp.zip" https://water.usgs.gov/GIS/dsdl/huc250k_shp.zip
     curl -fsSL -o "$tmp/huc_name.txt" https://water.usgs.gov/GIS/huc_name.txt
     python3 -m viz.vendor_basins "/vsizip/$tmp/huc250k_shp.zip/huc250k_shp/huc250k.shp" "$tmp/huc_name.txt" \
@@ -39,6 +44,7 @@ case "${1:-}" in
     # Rivers: HydroRIVERS v1.0 North America (66 MB) in two Strahler-order bands, named from the
     # Natural Earth 10 m rivers and the North America supplement (two output files).
     tmp=$(mktemp -d)
+    tmps+=("$tmp")
     curl -fsSL -o "$tmp/hydrorivers.zip" https://data.hydrosheds.org/file/HydroRIVERS/HydroRIVERS_v10_na_shp.zip
     curl -fsSL -o "$tmp/ne_rivers.zip" https://naciscdn.org/naturalearth/10m/physical/ne_10m_rivers_lake_centerlines.zip
     curl -fsSL -o "$tmp/ne_rivers_na.zip" https://naciscdn.org/naturalearth/10m/physical/ne_10m_rivers_north_america.zip
