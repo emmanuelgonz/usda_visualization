@@ -1,21 +1,21 @@
 """Attach the nearby HLS acquisitions to every EMIT scene.
 
-Run after the HLS fetch by ./run.sh hls and ./run.sh footprints. For each
+Run after the HLS refresh by ./run.sh hls and ./run.sh footprints. For each
 EMIT scene every MGRS tile containing the scene centroid is looked up (two
-or four where tiles overlap by 9.8 km), and their acquisitions within
-PAIR_DAYS either side of the scene date are written onto the feature as its
-"hls_near" property, nearest in time first, one entry per date and sensor
-with the lowest cloud value kept. The per-click "hls" tag
-on /api/point is a different field. The interface marks ECOSTRESS + HLS
-coincidence from this list for any smaller window, cloud threshold, or
-sensor without a round trip. Mirrors viz/coincidence.py.
+or four where tiles overlap), and their acquisitions within PAIR_DAYS either
+side of the scene date are written onto the feature as its "hls_near"
+property, nearest in time first, one entry per date and sensor with the
+lowest cloud value kept. The interface marks ECOSTRESS + HLS coincidence
+from this list without a round trip. Retired in step 4 of the mission
+registry design, when coincidence becomes a query.
 """
 
 import datetime
 import json
 import sys
 
-from viz import cmr, hls, paths
+from viz import catalog, cmr, paths, registry, spatial
+from viz.archetypes import tiled
 
 PAIR_DAYS = 15     # days either side of the scene date kept on the feature
 CAP = 12           # acquisitions kept per scene
@@ -27,8 +27,8 @@ def centroid(ring):
     return (sum(p[0] for p in points) / len(points), sum(p[1] for p in points) / len(points))
 
 
-def pair(emit_features, store, index, days=PAIR_DAYS, cap=CAP):
-    """Attach hls lists to every EMIT feature. Returns the number of scenes with at least one."""
+def pair(emit_features, cat, mission, index, days=PAIR_DAYS, cap=CAP):
+    """Attach hls_near lists to every EMIT feature. Returns the number of scenes with at least one."""
     paired = 0
     span = datetime.timedelta(days=days)
     for feature in emit_features:
@@ -38,7 +38,7 @@ def pair(emit_features, store, index, days=PAIR_DAYS, cap=CAP):
         hits = []
         if tiles and props.get("start"):
             base = datetime.date.fromisoformat(props["start"][:10])
-            rows = store.acquisitions(tiles, (base - span).isoformat(), (base + span).isoformat())
+            rows = tiled.acquisitions(cat, mission, tiles, (base - span).isoformat(), (base + span).isoformat())
             best = {}
             for row in rows:
                 key = (row["date"], row["sensor"])
@@ -59,20 +59,27 @@ def pair(emit_features, store, index, days=PAIR_DAYS, cap=CAP):
 
 
 def main(argv=None):
-    if not paths.HLS_DB.is_file():
-        print(f"hls pairs: no HLS store at {paths.HLS_DB}; run ./run.sh hls first", file=sys.stderr)
+    reg = registry.load()
+    mission = reg.mission("hls")
+    path = paths.catalog_db(reg.region.name)
+    if not path.is_file():
+        print(f"hls pairs: no catalog at {path}; run ./run.sh migrate once, then ./run.sh refresh", file=sys.stderr)
         return 1
     if not paths.EMIT_FOOTPRINTS.is_file():
         print(f"hls pairs: no EMIT file at {paths.EMIT_FOOTPRINTS}; run ./run.sh footprints first",
               file=sys.stderr)
         return 1
-    store = hls.Store(paths.HLS_DB, read_only=True)
+    cat = catalog.open_read_only(path)
     try:
-        index = hls.TileIndex(store)
+        rings = cat.tile_rings(mission.grid)
+        if not rings:
+            print("hls pairs: the catalog has no HLS tile outlines; run ./run.sh refresh hls first", file=sys.stderr)
+            return 1
+        index = spatial.RingIndex((ring, tile) for tile, ring in rings)
         emit_data = json.loads(paths.EMIT_FOOTPRINTS.read_text())
-        paired = pair(emit_data["features"], store, index)
+        paired = pair(emit_data["features"], cat, mission, index)
     finally:
-        store.close()
+        cat.close()
     cmr.write_geojson(emit_data["features"], paths.EMIT_FOOTPRINTS)
     total = len(emit_data["features"])
     print(f"hls pairs: {paired} of {total} EMIT scenes have an HLS acquisition within "

@@ -114,23 +114,7 @@
       </div>
       <div id="ecoLegend"></div>
     </div>
-    <label class="inline"><input autocomplete="off" type="checkbox" id="hls"> HLS coverage</label>
-    <div class="sub" id="hlsControls">
-      <div class="inline">Mode:
-        <label class="inline"><input autocomplete="off" type="radio" name="hlsMode" value="week" checked> Week window</label>
-        <label class="inline"><input autocomplete="off" type="radio" name="hlsMode" value="season"> Season</label>
-      </div>
-      <div class="note" id="hlsRange"></div>
-      <label>Max cloud <output id="hlsCloudOut">30%</output>
-        <input autocomplete="off" type="range" id="hlsCloud" min="0" max="100" step="5" value="30">
-      </label>
-      <div class="inline">Sensor:
-        <label class="inline"><input autocomplete="off" type="radio" name="hlsSensor" value="ALL" checked> Both</label>
-        <label class="inline"><input autocomplete="off" type="radio" name="hlsSensor" value="L30"> L30</label>
-        <label class="inline"><input autocomplete="off" type="radio" name="hlsSensor" value="S30"> S30</label>
-      </div>
-      <div id="hlsLegend"></div>
-    </div>
+    <div id="missionControls"></div>
     </section>
     <p id="pairing" class="note"></p>
   </details>
@@ -149,6 +133,7 @@
 </aside>
 
 <script src="/static/vendor/leaflet/leaflet.js"></script>
+<script src="/static/missions.js"></script>
 <script src="/static/app.js"></script>
 </body>
 </html>

@@ -57,25 +57,21 @@ case "${1:-}" in
     ;;
   footprints|emit)
     # Fetches EMIT L2A footprints and ECOSTRESS swath boxes over CONUS from
-    # NASA's CMR (no login), pairs them, then refreshes the HLS store and its EMIT pairs.
+    # NASA's CMR (no login), pairs them, then refreshes HLS in the catalog and its EMIT pairs.
     # Rerun to refresh. Network access. "emit" is kept as an alias.
     shift
     python3 -m viz.fetch_emit "$@"
     python3 -m viz.fetch_eco "$@"
     python3 -m viz.coincidence "$@"
-    python3 -m viz.fetch_hls "$@"
+    python3 -m viz.refresh hls
     python3 -m viz.hls_pairs
     ;;
   hls)
-    # Fetches HLSL30 and HLSS30 v2.0 granule metadata (2022 onward) into
-    # data/hls/hls.sqlite, one CSV query per collection-month: about 635 pages
-    # in 15-25 minutes on a first run; reruns skip frozen months. Tile outlines
-    # are computed from the tile IDs on every run (no ring queries). Then each
-    # EMIT scene is paired with its tile's acquisitions within 15 days for the
-    # coincidence marking, when EMIT footprints exist. Accepts --from YYYY-MM
-    # for a shorter first run. Network access.
+    # Refreshes the HLS mission in the region catalog (frozen months skipped),
+    # then pairs each EMIT scene with its tile's acquisitions within 15 days
+    # for the coincidence marking. Accepts --from YYYY-MM. Network access.
     shift
-    python3 -m viz.fetch_hls "$@"
+    python3 -m viz.refresh hls "$@"
     if [ -f data/emit/footprints.geojson ]; then
       python3 -m viz.hls_pairs
     else
@@ -112,9 +108,6 @@ case "${1:-}" in
     fi
     if [ ! -f viz/web/vendor/rivers6.geojson ] || [ ! -f viz/web/vendor/rivers4.geojson ]; then
       echo "note: river lines missing (viz/web/vendor/rivers6.geojson, rivers4.geojson); the river layers are off until ./run.sh vendor is run" >&2
-    fi
-    if [ ! -f data/hls/hls.sqlite ]; then
-      echo "note: no HLS store (data/hls/hls.sqlite); the HLS layer is off until ./run.sh hls is run" >&2
     fi
     if [ ! -f data/catalog/conus.sqlite ]; then
       echo "note: no region catalog (data/catalog/conus.sqlite); run ./run.sh migrate once, then ./run.sh refresh" >&2

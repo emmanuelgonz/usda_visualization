@@ -6,10 +6,11 @@ paging depth at one million rows per query, so months are the unit.
 """
 
 import csv
+import datetime
 import io
 import re
 
-from viz import cmr
+from viz import cmr, filters
 from viz.months import month_bounds
 
 CSV_URL = "https://cmr.earthdata.nasa.gov/search/granules.csv"
@@ -92,3 +93,70 @@ def fetch_month(mission, collection, bbox, month, fetch_fn=cmr.fetch_response):
         raise ValueError(f"{collection.short_name} {month}: CMR reported {hits} granules but delivered {len(rows)}")
     start, end = month_bounds(month)
     return [r for r in rows if start <= r["start"][:10] < end]
+
+
+def _day_after(end):
+    return (datetime.date.fromisoformat(end) + datetime.timedelta(days=1)).isoformat()
+
+
+def counts(cat, mission, start, end, values):
+    """Clear acquisitions per tile over the inclusive date range, filters applied in SQL; zero tiles omitted.
+
+    Column names come from the registry, never from the request; values are bound.
+    The range on start (not substr) keeps the start indexes usable; the planner
+    needs the statistics Catalog.analyze() records to pick them over the tile index.
+    """
+    stop = _day_after(end)
+    where = ["mission = ?", "tile IS NOT NULL", "start >= ?", "start < ?"]
+    args = [mission.key, start, stop]
+    for control in mission.filters:
+        value = values.get(control.attribute, control.default)
+        if control.control == "max":
+            where.append(f"{control.attribute} <= ?")
+            args.append(value)
+        elif value != "ALL":
+            where.append(f"{control.attribute} = ?")
+            args.append(value)
+    sql = "SELECT tile, COUNT(*) AS n FROM granules WHERE " + " AND ".join(where) + " GROUP BY tile"
+    return {row["tile"]: row["n"] for row in cat.conn.execute(sql, args)}
+
+
+def acquisitions(cat, mission, tiles, start, end):
+    """Every acquisition of the given tiles in the inclusive date range, oldest first then by tile."""
+    tiles = list(tiles)
+    if not tiles:
+        return []
+    marks = ",".join("?" * len(tiles))
+    sql = (f"SELECT tile, start, cloud, sensor, daynight, orbit FROM granules WHERE mission = ? "
+           f"AND tile IN ({marks}) AND start >= ? AND start < ? ORDER BY start, tile")
+    rows = []
+    for row in cat.conn.execute(sql, [mission.key, *tiles, start, _day_after(end)]):
+        item = {"tile": row["tile"], "date": row["start"][:10], "time": row["start"]}
+        for name in mission.attributes:
+            item[name] = row[name] if name in row.keys() else None
+        rows.append(item)
+    return rows
+
+
+def tiles_geojson(cat, grid):
+    features = [{"type": "Feature", "geometry": {"type": "Polygon", "coordinates": [ring]},
+                 "properties": {"tile": tile}} for tile, ring in cat.tile_rings(grid)]
+    return {"type": "FeatureCollection", "features": features}
+
+
+def nearest_clear(rows, date, window):
+    """The row nearest the date within ±window days, ties to the earlier time; None if none.
+
+    rows must already be filtered. dt is the acquisition date minus the given
+    date in whole calendar days.
+    """
+    base = datetime.date.fromisoformat(date)
+    best = None
+    for row in rows:
+        dt = (datetime.date.fromisoformat(row["date"]) - base).days
+        if abs(dt) > window:
+            continue
+        key = (abs(dt), row["time"])
+        if best is None or key < best[0]:
+            best = (key, {"date": row["date"], "sensor": row.get("sensor"), "cloud": row.get("cloud"), "dt": dt})
+    return best[1] if best else None

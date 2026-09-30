@@ -35,7 +35,7 @@
               {"short_name": "HLSS30", "version": "2.0", "implies": {"sensor": "S30"}}],
       "since": "2022-01",
       "tile_from": {"field": "title", "pattern": "^HLS\\.[LS]30\\.(T[0-9]{2}[A-Z]{3})\\."},
-      "attributes": {"cloud": {"from": "cloud_cover", "type": "number"},
+      "attributes": {"cloud": {"from": "cloud_cover", "type": "int"},
                      "sensor": {"from": "sensor", "type": "text"}},
       "filters": [{"attribute": "cloud", "control": "max", "default": 30, "label": "Max cloud"},
                   {"attribute": "sensor", "control": "choice", "values": ["ALL", "L30", "S30"], "default": "ALL", "label": "Sensor"}],

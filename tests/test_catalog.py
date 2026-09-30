@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import sqlite3
 import tempfile
@@ -6,6 +7,7 @@ import unittest
 from pathlib import Path
 
 from viz import catalog
+from viz import catalog as catalog_module
 
 RING = [[-100, 40], [-99, 40], [-99, 41], [-100, 41], [-100, 40]]
 
@@ -35,7 +37,13 @@ class TestCatalog(unittest.TestCase):
         names = {r[0] for r in self.cat.conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         self.assertEqual(names, {"granules", "tiles", "coverage", "months"})
         indexes = {r[0] for r in self.cat.conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'granules_%'")}
-        self.assertEqual(indexes, {"granules_mission_start", "granules_mission_tile", "granules_mission_lat"})
+        self.assertEqual(indexes, {"granules_mission_start", "granules_mission_tile", "granules_mission_lat",
+                           "granules_mission_start_cloud_tile", "granules_mission_sensor_start"})
+
+    def test_analyze_records_planner_statistics(self):
+        self.cat.replace_month("sw", "2025-07", [swath_row("a", "2025-07-02T10:00:00Z")], "x")
+        self.cat.analyze()
+        self.assertGreater(self.cat.conn.execute("SELECT COUNT(*) FROM sqlite_stat1").fetchone()[0], 0)
 
     def test_bulk_mode_sets_pragmas(self):
         self.cat.bulk_mode()
@@ -120,3 +128,38 @@ class TestCatalog(unittest.TestCase):
         finally:
             writer.execute("ROLLBACK")
             writer.close()
+
+
+class TestCatalogFor(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.path = self.tmp / "c.sqlite"
+        writer = catalog.Catalog(self.path)
+        writer.put_tiles("mgrs", [("T99ZZZ", RING)])
+        writer.close()
+
+    def tearDown(self):
+        catalog_module._drop_cached()
+
+    def test_returns_handle_and_tile_index_and_none_when_absent(self):
+        cat, indexes = catalog.catalog_for(self.path)
+        self.assertEqual(indexes["mgrs"].covering(-99.5, 40.5), ["T99ZZZ"])
+        self.assertIs(catalog.catalog_for(self.path)[0], cat)          # cached for this thread
+        self.assertIsNone(catalog.catalog_for(self.tmp / "none.sqlite"))
+
+    def test_catalog_for_reopens_on_change(self):
+        first, _ = catalog.catalog_for(self.path)
+        writer = catalog.Catalog(self.path)
+        writer.put_tiles("mgrs", [("T98ZZZ", [[20, 40], [21, 40], [21, 41], [20, 41], [20, 40]])])
+        writer.close()
+        stamp = os.stat(self.path).st_mtime_ns + 1_000_000
+        os.utime(self.path, ns=(stamp, stamp))
+        second, indexes = catalog.catalog_for(self.path)
+        self.assertIsNot(second, first)
+        self.assertEqual(indexes["mgrs"].covering(20.5, 40.5), ["T98ZZZ"])
+
+    def test_is_busy(self):
+        self.assertTrue(catalog.is_busy(sqlite3.OperationalError("database is locked")))
+        self.assertTrue(catalog.is_busy(sqlite3.OperationalError("database table is busy")))
+        self.assertFalse(catalog.is_busy(sqlite3.OperationalError("no such column: nope")))

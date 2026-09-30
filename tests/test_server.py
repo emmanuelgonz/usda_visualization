@@ -1,5 +1,6 @@
 import http.client
 import json
+import os
 import re
 import shutil
 import struct
@@ -28,7 +29,7 @@ class ServerTestCase(unittest.TestCase):
         cls.tmp = Path(tempfile.mkdtemp())
         cls._saved = (paths.DATA, paths.CPC_DATA, paths.CDL_DATA, paths.MASK_DATA,
                       paths.CATALOG, paths.TILE_CACHE, paths.EMIT_FOOTPRINTS, paths.ECO_FOOTPRINTS, paths.BASINS2, paths.BASINS4,
-                      paths.RIVERS6, paths.RIVERS4, paths.HLS_DB)
+                      paths.RIVERS6, paths.RIVERS4, paths.CATALOG_DATA)
 
         paths.DATA = cls.tmp / "data"
         paths.CPC_DATA = paths.DATA / "cpc"
@@ -42,7 +43,7 @@ class ServerTestCase(unittest.TestCase):
         paths.BASINS4 = cls.tmp / "vendor" / "basins4.geojson"
         paths.RIVERS6 = cls.tmp / "vendor" / "rivers6.geojson"
         paths.RIVERS4 = cls.tmp / "vendor" / "rivers4.geojson"
-        paths.HLS_DB = paths.DATA / "hls" / "hls.sqlite"
+        paths.CATALOG_DATA = cls.tmp / "catalog"
 
         (paths.CPC_DATA / "corn" / "cond").mkdir(parents=True)
         paths.CDL_DATA.mkdir(parents=True)
@@ -99,30 +100,50 @@ class ServerTestCase(unittest.TestCase):
         coincidence.pair(emit_doc["features"], eco_doc["features"])
         paths.EMIT_FOOTPRINTS.write_text(json.dumps(emit_doc))
 
-        # An HLS store with one tile over the fixture centre and one far away.
-        from viz import hls
+        # A catalog with one HLS tile over the fixture centre and one far away.
+        from viz import catalog as catalog_module, registry
 
-        def acq(ur, start, cloud):
-            sensor, tile = hls.parse_ur(ur)
-            return {"id": ur, "tile": tile, "date": start[:10], "time": start, "sensor": sensor, "cloud": cloud}
+        def acq(gid, start, tile, cloud, sensor):
+            return {"id": gid, "start": start, "end": start, "tile": tile, "cloud": cloud, "sensor": sensor}
 
-        hls_store = hls.Store(paths.HLS_DB)
-        hls_store.replace_month("S30", "2025-07", [
-            acq("HLS.S30.T99ZZZ.2025199T170000.v2.0", "2025-07-18T17:00:00Z", 10),
-            acq("HLS.S30.T99ZZZ.2025204T170000.v2.0", "2025-07-23T17:00:00Z", 10),
-            acq("HLS.S30.T98ZZZ.2025201T170000.v2.0", "2025-07-20T17:00:00Z", 0),
+        cat = catalog_module.Catalog(paths.catalog_db("CONUS"))
+        cat.replace_month("hls", "2025-07", [
+            acq("HLS.S30.T99ZZZ.2025199T170000.v2.0", "2025-07-18T17:00:00Z", "T99ZZZ", 10, "S30"),
+            acq("HLS.S30.T99ZZZ.2025204T170000.v2.0", "2025-07-23T17:00:00Z", "T99ZZZ", 10, "S30"),
+            acq("HLS.S30.T98ZZZ.2025201T170000.v2.0", "2025-07-20T17:00:00Z", "T98ZZZ", 0, "S30"),
+            acq("HLS.L30.T99ZZZ.2025202T160000.v2.0", "2025-07-21T16:00:00Z", "T99ZZZ", 80, "L30"),
         ], "2025-08-02T00:00:00+00:00")
-        hls_store.replace_month("L30", "2025-07", [
-            acq("HLS.L30.T99ZZZ.2025202T160000.v2.0", "2025-07-21T16:00:00Z", 80),
-        ], "2025-08-02T00:00:00+00:00")
-        hls_store.put_tile("T99ZZZ", square(cls.lon, cls.lat, 0.5))
-        hls_store.put_tile("T98ZZZ", square(cls.lon + 20, cls.lat, 0.5))
-        # Attach the HLS lists to the EMIT fixture the way ./run.sh hls would.
-        from viz import hls_pairs
+        cat.put_tiles("mgrs", [("T99ZZZ", square(cls.lon, cls.lat, 0.5)), ("T98ZZZ", square(cls.lon + 20, cls.lat, 0.5))])
+        # Attach the HLS lists to the EMIT fixture the way ./run.sh hls does: centroid tile, ±15 days.
+        import datetime as _dt
+        from viz import spatial
+        from viz.archetypes import tiled
+        hls_mission = registry.load().mission("hls")
+        index = spatial.RingIndex((ring, tile) for tile, ring in cat.tile_rings("mgrs"))
         emit_doc = json.loads(paths.EMIT_FOOTPRINTS.read_text())
-        hls_pairs.pair(emit_doc["features"], hls_store, hls.TileIndex(hls_store))
+        for feature in emit_doc["features"]:
+            ring = feature["geometry"]["coordinates"][0]
+            pts = ring[:-1] if ring[0] == ring[-1] else ring
+            lon, lat = sum(p[0] for p in pts) / len(pts), sum(p[1] for p in pts) / len(pts)
+            tiles = index.covering(lon, lat)
+            hits = []
+            start = feature["properties"].get("start")
+            if tiles and start:
+                base = _dt.date.fromisoformat(start[:10])
+                lo, hi = (base - _dt.timedelta(days=15)).isoformat(), (base + _dt.timedelta(days=15)).isoformat()
+                best = {}
+                for row in tiled.acquisitions(cat, hls_mission, tiles, lo, hi):
+                    key = (row["date"], row["sensor"])
+                    if key in best and (row["cloud"] is None or (best[key]["cloud"] is not None and best[key]["cloud"] <= row["cloud"])):
+                        continue
+                    best[key] = {"date": row["date"], "sensor": row["sensor"], "cloud": row["cloud"],
+                                 "dt": (_dt.date.fromisoformat(row["date"]) - base).days, "_t": row["time"]}
+                hits = sorted(best.values(), key=lambda h: (abs(h["dt"]), h["_t"]))
+                for h in hits:
+                    del h["_t"]
+            feature["properties"]["hls_near"] = hits[:12]
         paths.EMIT_FOOTPRINTS.write_text(json.dumps(emit_doc))
-        hls_store.close()
+        cat.close()
 
         # Hydrologic units: a region and a subregion around the fixture centre.
         paths.BASINS2.parent.mkdir(parents=True, exist_ok=True)
@@ -148,7 +169,7 @@ class ServerTestCase(unittest.TestCase):
         cls.server.server_close()
         (paths.DATA, paths.CPC_DATA, paths.CDL_DATA, paths.MASK_DATA,
          paths.CATALOG, paths.TILE_CACHE, paths.EMIT_FOOTPRINTS, paths.ECO_FOOTPRINTS, paths.BASINS2, paths.BASINS4,
-         paths.RIVERS6, paths.RIVERS4, paths.HLS_DB) = cls._saved
+         paths.RIVERS6, paths.RIVERS4, paths.CATALOG_DATA) = cls._saved
         shutil.rmtree(cls.tmp, ignore_errors=True)
 
     def get(self, path):
@@ -419,65 +440,110 @@ class TestEcoRoutes(ServerTestCase):
             moved.rename(paths.ECO_FOOTPRINTS)
 
 
-class TestHlsRoutes(ServerTestCase):
+def square(lon, lat, half):
+    return [[lon - half, lat - half], [lon + half, lat - half], [lon + half, lat + half],
+            [lon - half, lat + half], [lon - half, lat - half]]
+
+
+class TestMissionRoutes(ServerTestCase):
     HLS_QUERY = "&start=2025-07-15&end=2025-07-31&cloud=30&sensor=ALL&window=7"
 
+    def test_catalog_lists_missions_with_counts(self):
+        catalog = json.loads(self.get("/api/catalog")[2])
+        by_key = {m["key"]: m for m in catalog["missions"]}
+        self.assertEqual(list(by_key), ["emit", "eco", "hls"])
+        hls = by_key["hls"]
+        self.assertEqual((hls["archetype"], hls["grid"], hls["count"], hls["tiles"], hls["fetched"]),
+                         ("tiled", "mgrs", 4, 2, "2025-08-02T00:00:00+00:00"))
+        self.assertEqual(hls["filters"][0]["attribute"], "cloud")
+        self.assertEqual(by_key["emit"]["count"], 0)          # not migrated in this fixture
+        self.assertFalse(catalog["catalog_busy"])
+        for old in ("hls_count", "hls_tiles", "hls_fetched", "hls_busy"):
+            self.assertNotIn(old, catalog)
+
     def test_tiles_are_served_as_geojson(self):
-        status, ctype, body = self.get("/api/hls/tiles.geojson")
+        status, ctype, body = self.get("/api/missions/hls/tiles.geojson")
         self.assertEqual(status, 200)
         self.assertEqual(ctype, "application/geo+json")
-        tiles = [f["properties"]["tile"] for f in json.loads(body)["features"]]
-        self.assertEqual(tiles, ["T98ZZZ", "T99ZZZ"])
+        self.assertEqual([f["properties"]["tile"] for f in json.loads(body)["features"]], ["T98ZZZ", "T99ZZZ"])
+        for route, word in (("/api/missions/nope/tiles.geojson", "unknown mission"),
+                            ("/api/missions/emit/tiles.geojson", "not tiled")):
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                self.get(route)
+            self.assertEqual(ctx.exception.code, 404)
+            self.assertIn(word, ctx.exception.read().decode())
 
-    def test_counts_apply_range_cloud_and_sensor(self):
-        _, ctype, body = self.get("/api/hls/counts?start=2025-07-15&end=2025-07-31&cloud=30&sensor=ALL")
+    def test_counts_apply_range_and_filters(self):
+        _, ctype, body = self.get("/api/missions/hls/counts?start=2025-07-15&end=2025-07-31&f.cloud=30&f.sensor=ALL")
         self.assertEqual(ctype, "application/json")
         self.assertEqual(json.loads(body), {"counts": {"T99ZZZ": 2, "T98ZZZ": 1}})
-        _, _, body = self.get("/api/hls/counts?start=2025-07-15&end=2025-07-31&cloud=30&sensor=L30")
+        _, _, body = self.get("/api/missions/hls/counts?start=2025-07-15&end=2025-07-31&f.cloud=30&f.sensor=L30")
         self.assertEqual(json.loads(body), {"counts": {}})
-        _, _, body = self.get("/api/hls/counts?start=2025-07-19&end=2025-07-22&cloud=100&sensor=ALL")
+        _, _, body = self.get("/api/missions/hls/counts?start=2025-07-19&end=2025-07-22&f.cloud=100")
         self.assertEqual(json.loads(body), {"counts": {"T99ZZZ": 1, "T98ZZZ": 1}})
 
     def test_counts_reject_bad_parameters(self):
-        for query in ("start=2025-07-15&end=2025-07-31&cloud=30&sensor=X30",
-                      "start=2025-7-15&end=2025-07-31&cloud=30&sensor=ALL",
-                      "start=2025-07-15&end=2025-07-31&cloud=abc&sensor=ALL",
-                      "end=2025-07-31&cloud=30&sensor=ALL",
-                      "start=2025-13-40&end=2025-07-31&cloud=30&sensor=ALL",      # not a calendar date
-                      "start=2025-08-01&end=2025-07-01&cloud=30&sensor=ALL"):     # reversed range
+        for query in ("start=2025-07-15&end=2025-07-31&f.sensor=X30",
+                      "start=2025-7-15&end=2025-07-31",
+                      "start=2025-07-15&end=2025-07-31&f.cloud=abc",
+                      "start=2025-07-15&end=2025-07-31&f.cloud=150",
+                      "end=2025-07-31",
+                      "start=2025-13-40&end=2025-07-31",
+                      "start=2025-08-01&end=2025-07-01",
+                      "start=2025-07-15&end=2025-07-31&f.nope=1"):
             with self.assertRaises(urllib.error.HTTPError) as ctx:
-                self.get("/api/hls/counts?" + query)
-            self.assertEqual(ctx.exception.code, 400, query)
-
-    def test_catalog_reports_hls_fields(self):
-        catalog = json.loads(self.get("/api/catalog")[2])
-        self.assertEqual(catalog["hls_count"], 4)
-        self.assertEqual(catalog["hls_tiles"], 2)
-        self.assertEqual(catalog["hls_fetched"], "2025-08-02T00:00:00+00:00")
-        self.assertFalse(catalog["hls_busy"])
+                self.get("/api/missions/hls/counts?" + query)
+            self.assertEqual(ctx.exception.code, 400)
 
     def test_point_lists_covering_tiles_with_clear_counts(self):
         report = json.loads(self.get(self.point_url() + self.HLS_QUERY)[2])
-        block = report["hls"]
+        self.assertNotIn("hls", report)
+        block = report["missions"]["hls"]
         self.assertEqual((block["start"], block["end"], block["cloud"], block["sensor"], block["window"]),
                          ("2025-07-15", "2025-07-31", 30, "ALL", 7))
         self.assertEqual(len(block["tiles"]), 1)
         tile = block["tiles"][0]
-        self.assertEqual(tile["tile"], "T99ZZZ")
-        self.assertEqual(tile["clear"], 2)
+        self.assertEqual((tile["tile"], tile["clear"]), ("T99ZZZ", 2))
         self.assertEqual([a["date"] for a in tile["acq"]], ["2025-07-18", "2025-07-21", "2025-07-23"])
-        self.assertEqual(tile["acq"][1], {"date": "2025-07-21", "time": "2025-07-21T16:00:00Z",
-                                          "sensor": "L30", "cloud": 80})
+        self.assertEqual(tile["acq"][1], {"date": "2025-07-21", "time": "2025-07-21T16:00:00Z", "sensor": "L30", "cloud": 80.0})
 
     def test_point_tags_emit_scenes_with_the_nearest_clear_acquisition(self):
         report = json.loads(self.get(self.point_url() + self.HLS_QUERY)[2])
         by_id = {g["id"]: g for g in report["emit"]}
-        self.assertEqual(by_id["near-new"]["hls"], {"date": "2025-07-18", "sensor": "S30", "cloud": 10, "dt": -2})
+        self.assertEqual(by_id["near-new"]["hls"], {"date": "2025-07-18", "sensor": "S30", "cloud": 10.0, "dt": -2})
         self.assertIsNone(by_id["near-old"]["hls"])
-        # The sensor filter applies to the tag: with S30 excluded only the cloudy L30 row remains.
         report = json.loads(self.get(self.point_url() + "&start=2025-07-15&end=2025-07-31&cloud=30&sensor=L30&window=7")[2])
         self.assertIsNone({g["id"]: g for g in report["emit"]}["near-new"]["hls"])
-        self.assertEqual(report["hls"]["tiles"][0]["clear"], 0)
+        self.assertEqual(report["missions"]["hls"]["tiles"][0]["clear"], 0)
+
+    def test_point_in_overlapping_tiles_lists_both(self):
+        # A second tile overlapping the fixture centre, with one acquisition of its own.
+        from viz import catalog as catalog_module
+        cat = catalog_module.Catalog(paths.catalog_db("CONUS"))
+        cat.put_tiles("mgrs", [("T97ZZZ", square(self.lon + 0.2, self.lat, 0.5))])
+        cat.conn.execute("INSERT INTO granules (mission, id, start, end, tile, cloud, sensor) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                         ("hls", "HLS.S30.T97ZZZ.2025200T170000.v2.0", "2025-07-19T17:00:00Z", "2025-07-19T17:00:00Z",
+                          "T97ZZZ", 0, "S30"))
+        cat.conn.commit()
+        cat.close()
+        stamp = os.stat(paths.catalog_db("CONUS")).st_mtime_ns + 1_000_000
+        os.utime(paths.catalog_db("CONUS"), ns=(stamp, stamp))
+        try:
+            report = json.loads(self.get(self.point_url() + "&start=2025-07-15&end=2025-07-31&cloud=30&sensor=ALL&window=7")[2])
+            tiles = {t["tile"]: t for t in report["missions"]["hls"]["tiles"]}
+            self.assertEqual(sorted(tiles), ["T97ZZZ", "T99ZZZ"])
+            self.assertEqual([a["date"] for a in tiles["T97ZZZ"]["acq"]], ["2025-07-19"])
+            self.assertEqual(tiles["T99ZZZ"]["clear"], 2)
+            by_id = {g["id"]: g for g in report["emit"]}
+            self.assertEqual(by_id["near-new"]["hls"], {"date": "2025-07-19", "sensor": "S30", "cloud": 0.0, "dt": -1})
+        finally:
+            cat = catalog_module.Catalog(paths.catalog_db("CONUS"))
+            cat.conn.execute("DELETE FROM tiles WHERE tile = 'T97ZZZ'")
+            cat.conn.execute("DELETE FROM granules WHERE tile = 'T97ZZZ'")
+            cat.conn.commit()
+            cat.close()
+            stamp = os.stat(paths.catalog_db("CONUS")).st_mtime_ns + 1_000_000
+            os.utime(paths.catalog_db("CONUS"), ns=(stamp, stamp))
 
     def test_point_rejects_a_lone_start_or_end(self):
         for query in ("&start=2025-07-15", "&end=2025-07-31"):
@@ -494,22 +560,33 @@ class TestHlsRoutes(ServerTestCase):
             self.assertEqual(ctx.exception.code, 400)
             self.assertIn(message, ctx.exception.read().decode())
         report = json.loads(self.get(self.point_url() + "&start=2025-07-20&end=2025-07-20&cloud=30&sensor=ALL&window=7")[2])
-        self.assertEqual((report["hls"]["start"], report["hls"]["end"]), ("2025-07-20", "2025-07-20"))   # start == end is valid
+        self.assertEqual((report["missions"]["hls"]["start"], report["missions"]["hls"]["end"]), ("2025-07-20", "2025-07-20"))
 
     def test_a_query_fault_is_a_500_not_busy(self):
         import sqlite3
         from unittest import mock
-        with mock.patch.object(tileserver.hls, "store_for", side_effect=sqlite3.OperationalError("no such column: nope")):
+        with mock.patch.object(tileserver.catalog, "catalog_for", side_effect=sqlite3.OperationalError("no such column: nope")):
             with self.assertRaises(urllib.error.HTTPError) as ctx:
-                self.get("/api/hls/counts?start=2025-07-15&end=2025-07-31&cloud=30&sensor=ALL")
+                self.get("/api/missions/hls/counts?start=2025-07-15&end=2025-07-31")
             self.assertEqual(ctx.exception.code, 500)
             self.assertIn("no such column", ctx.exception.read().decode())
 
+    def test_a_locked_catalog_is_503_and_a_null_missions_block(self):
+        import sqlite3
+        from unittest import mock
+        with mock.patch.object(tileserver.catalog, "catalog_for", side_effect=sqlite3.OperationalError("database is locked")):
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                self.get("/api/missions/hls/counts?start=2025-07-15&end=2025-07-31")
+            self.assertEqual(ctx.exception.code, 503)
+            report = json.loads(self.get(self.point_url() + self.HLS_QUERY)[2])
+            self.assertIsNone(report["missions"])
+            catalog = json.loads(self.get("/api/catalog")[2])
+            self.assertTrue(catalog["catalog_busy"])
+
     def test_point_defaults_the_range_to_the_week_window(self):
-        # 2024 week 30 ends Sunday 2024-07-28; ±7 days is 07-21 to 08-04.
         report = json.loads(self.get(self.point_url() + "&week=30")[2])
-        self.assertEqual((report["hls"]["start"], report["hls"]["end"]), ("2024-07-21", "2024-08-04"))
-        self.assertEqual(report["hls"]["tiles"][0]["acq"], [])
+        self.assertEqual((report["missions"]["hls"]["start"], report["missions"]["hls"]["end"]), ("2024-07-21", "2024-08-04"))
+        self.assertEqual(report["missions"]["hls"]["tiles"][0]["acq"], [])
 
     def test_point_payload_omits_the_map_only_pairing_list(self):
         report = json.loads(self.get(self.point_url() + self.HLS_QUERY)[2])
@@ -517,51 +594,70 @@ class TestHlsRoutes(ServerTestCase):
             self.assertNotIn("hls_near", g)
 
     def test_point_outside_every_tile_ring_leaves_emit_scenes_untagged(self):
-        # No covering tile means nothing is known about the HLS record here, which
-        # is not the same as a covering tile holding no clear acquisition.
         url = (f"/api/point?lon={self.lon + 10:.6f}&lat={self.lat:.6f}"
                "&crop=corn&year=2024&cdl_year=2024" + self.HLS_QUERY)
         report = json.loads(self.get(url)[2])
-        self.assertEqual(report["hls"]["tiles"], [])
+        self.assertEqual(report["missions"]["hls"]["tiles"], [])
         self.assertEqual([g["id"] for g in report["emit"]], ["no-tile"])
         for g in report["emit"]:
             self.assertNotIn("hls", g)
 
     def test_point_without_a_week_has_a_null_range_but_still_tags_scenes(self):
-        # No week and no explicit range: the listing has nothing to bound, while
-        # the per-scene tags run over each scene's own date.
         report = json.loads(self.get(self.point_url())[2])
-        block = report["hls"]
+        block = report["missions"]["hls"]
         self.assertEqual((block["start"], block["end"]), (None, None))
-        self.assertEqual([t["tile"] for t in block["tiles"]], ["T99ZZZ"])
-        self.assertEqual(block["tiles"][0], {"tile": "T99ZZZ", "clear": 0, "acq": []})
+        self.assertEqual(block["tiles"], [{"tile": "T99ZZZ", "clear": 0, "acq": []}])
         by_id = {g["id"]: g for g in report["emit"]}
-        self.assertEqual(by_id["near-new"]["hls"],
-                         {"date": "2025-07-18", "sensor": "S30", "cloud": 10, "dt": -2})
+        self.assertEqual(by_id["near-new"]["hls"], {"date": "2025-07-18", "sensor": "S30", "cloud": 10.0, "dt": -2})
         self.assertIsNone(by_id["near-old"]["hls"])
 
-    def test_missing_store_gives_404_null_block_and_zero_fields(self):
-        # A tagged request first: if hls_block wrote onto the FootprintIndex's own
-        # dicts, the tag would survive into the no-store response below.
+    def test_catalog_without_tiles_disables_the_layer(self):
+        from viz import catalog as catalog_module
+        path = paths.catalog_db("CONUS")
+        cat = catalog_module.Catalog(path)
+        saved = cat.tile_rings("mgrs")
+        cat.conn.execute("DELETE FROM tiles")
+        cat.conn.commit()
+        cat.close()
+        stamp = os.stat(path).st_mtime_ns + 1_000_000
+        os.utime(path, ns=(stamp, stamp))
+        try:
+            catalog = json.loads(self.get("/api/catalog")[2])
+            hls = {m["key"]: m for m in catalog["missions"]}["hls"]
+            self.assertEqual((hls["count"], hls["tiles"]), (4, 0))
+            geo = json.loads(self.get("/api/missions/hls/tiles.geojson")[2])
+            self.assertEqual(geo["features"], [])
+            report = json.loads(self.get(self.point_url() + self.HLS_QUERY)[2])
+            self.assertEqual(report["missions"]["hls"]["tiles"], [])
+        finally:
+            cat = catalog_module.Catalog(path)
+            cat.put_tiles("mgrs", saved)
+            cat.close()
+            stamp = os.stat(path).st_mtime_ns + 1_000_000
+            os.utime(path, ns=(stamp, stamp))
+
+    def test_missing_catalog_gives_404_null_block_and_zero_fields(self):
         tagged = json.loads(self.get(self.point_url() + self.HLS_QUERY)[2])
         self.assertIsNotNone({g["id"]: g for g in tagged["emit"]}["near-new"]["hls"])
-        moved = paths.HLS_DB.with_name("moved.sqlite")
-        paths.HLS_DB.rename(moved)
+        path = paths.catalog_db("CONUS")
+        moved = path.with_name("moved.sqlite")
+        path.rename(moved)
         try:
-            for route in ("/api/hls/tiles.geojson", "/api/hls/counts?start=2025-07-15&end=2025-07-31&cloud=30&sensor=ALL"):
+            for route in ("/api/missions/hls/tiles.geojson", "/api/missions/hls/counts?start=2025-07-15&end=2025-07-31"):
                 with self.assertRaises(urllib.error.HTTPError) as ctx:
                     self.get(route)
                 self.assertEqual(ctx.exception.code, 404)
-                self.assertIn("run.sh hls", ctx.exception.read().decode())
+                self.assertIn("run.sh migrate", ctx.exception.read().decode())
             report = json.loads(self.get(self.point_url() + self.HLS_QUERY)[2])
-            self.assertIsNone(report["hls"])
+            self.assertIsNone(report["missions"])
             for g in report["emit"]:
                 self.assertNotIn("hls", g)
             catalog = json.loads(self.get("/api/catalog")[2])
-            self.assertEqual((catalog["hls_count"], catalog["hls_tiles"], catalog["hls_fetched"]), (0, 0, None))
-            self.assertFalse(catalog["hls_busy"])   # absent is not busy
+            hls = {m["key"]: m for m in catalog["missions"]}["hls"]
+            self.assertEqual((hls["count"], hls["tiles"], hls["fetched"]), (0, 0, None))
+            self.assertFalse(catalog["catalog_busy"])
         finally:
-            moved.rename(paths.HLS_DB)
+            moved.rename(path)
 
 
 class TestEcoBrowseRoute(ServerTestCase):
@@ -634,37 +730,38 @@ class TestEcoBrowseRoute(ServerTestCase):
             self.assertEqual(ctx.exception.code, 502, repr(exc))
 
 
-class TestHlsBusyStore(ServerTestCase):
-    """A fetch holding the write lock degrades every HLS read; nothing returns 500."""
+class TestCatalogBusy(ServerTestCase):
+    """A refresh holding the write lock degrades every catalog read; nothing returns 500."""
 
     HLS_QUERY = "&start=2025-07-15&end=2025-07-31&cloud=30&sensor=ALL&window=7"
 
-    def test_a_locked_store_degrades_the_catalog_the_routes_and_the_point(self):
+    def test_a_locked_catalog_degrades_the_catalog_the_routes_and_the_point(self):
         import sqlite3
-        writer = sqlite3.connect(str(paths.HLS_DB), timeout=0.1)
+        writer = sqlite3.connect(str(paths.catalog_db("CONUS")), timeout=0.1)
         self.addCleanup(writer.close)
         writer.execute("BEGIN EXCLUSIVE")
         try:
             catalog = json.loads(self.get("/api/catalog")[2])
-            self.assertTrue(catalog["hls_busy"])
-            self.assertEqual((catalog["hls_count"], catalog["hls_tiles"], catalog["hls_fetched"]),
-                             (0, 0, None))
-            for route in ("/api/hls/tiles.geojson",
-                          "/api/hls/counts?start=2025-07-15&end=2025-07-31&cloud=30&sensor=ALL"):
+            self.assertTrue(catalog["catalog_busy"])
+            hls = {m["key"]: m for m in catalog["missions"]}["hls"]
+            self.assertEqual((hls["count"], hls["tiles"], hls["fetched"]), (0, 0, None))
+            for route in ("/api/missions/hls/tiles.geojson",
+                          "/api/missions/hls/counts?start=2025-07-15&end=2025-07-31"):
                 with self.subTest(route=route), self.assertRaises(urllib.error.HTTPError) as ctx:
                     self.get(route)
                 self.assertEqual(ctx.exception.code, 503)
-                self.assertIn("HLS store busy; a fetch is in progress, retry shortly",
+                self.assertIn("catalog busy; a refresh is in progress, retry shortly",
                               ctx.exception.read().decode())
             report = json.loads(self.get(self.point_url() + self.HLS_QUERY)[2])
-            self.assertIsNone(report["hls"])
+            self.assertIsNone(report["missions"])
             for g in report["emit"]:
                 self.assertNotIn("hls", g)
         finally:
             writer.rollback()
         catalog = json.loads(self.get("/api/catalog")[2])
-        self.assertFalse(catalog["hls_busy"])
-        self.assertEqual((catalog["hls_count"], catalog["hls_tiles"]), (4, 2))
+        self.assertFalse(catalog["catalog_busy"])
+        hls = {m["key"]: m for m in catalog["missions"]}["hls"]
+        self.assertEqual((hls["count"], hls["tiles"]), (4, 2))
 
 
 class TestHlsPairsOnEmit(ServerTestCase):
@@ -726,8 +823,14 @@ class TestInterfaceAssets(ServerTestCase):
         html = index.decode()
         panel = html[html.index('<aside id="panel">'):html.index("</aside>")]
         tags = re.findall(r"<(?:input|select)\b[^>]*>", panel)
-        self.assertGreater(len(tags), 30)
+        self.assertGreater(len(tags), 25)
         for tag in tags:
+            self.assertIn('autocomplete="off"', tag)
+        # The generated mission blocks carry the same attribute on every input they build.
+        _, _, missions = self.get("/static/missions.js")
+        generated = re.findall(r"<input\b[^>]*", missions.decode())
+        self.assertGreater(len(generated), 3)
+        for tag in generated:
             self.assertIn('autocomplete="off"', tag)
 
     def test_river_layers(self):
@@ -793,14 +896,14 @@ class TestInterfaceAssets(ServerTestCase):
         match = re.search(r"function hlsPaired\(p\) \{.*?\n  \}", text, re.S)
         self.assertIsNotNone(match, "hlsPaired function not found in app.js")
         script = (
-            'var HLS_PAIR_DAYS = 15; var state = { days: 7, hlsCloud: 30, hlsSensor: "ALL" };\n' + match.group(0) +
+            'var HLS_PAIR_DAYS = 15; var state = { days: 7 }; var Missions = { filter: function (k, a) { return a === "cloud" ? 30 : "ALL"; } };\n' + match.group(0) +
             '\nvar near = { hls_near: [{ date: "x", sensor: "S30", cloud: 10, dt: -2 }] };\n'
             'var farOnly = { hls_near: [{ date: "x", sensor: "S30", cloud: 0, dt: 20 }] };\n'
             'var cloudy = { hls_near: [{ date: "x", sensor: "S30", cloud: 80, dt: 1 }, { date: "x", sensor: "L30", cloud: null, dt: 1 }] };\n'
             'var out = [hlsPaired(near), hlsPaired(farOnly), hlsPaired(cloudy), hlsPaired({})];\n'
             'state.days = 30; out.push(hlsPaired(farOnly));\n'
-            'state.hlsSensor = "L30"; out.push(hlsPaired(near));\n'
-            'state.hlsSensor = "ALL"; state.days = 0; out.push(hlsPaired(near));\n'
+            'Missions.filter = function (k, a) { return a === "cloud" ? 30 : "L30"; }; out.push(hlsPaired(near));\n'
+            'Missions.filter = function (k, a) { return a === "cloud" ? 30 : "ALL"; }; state.days = 0; out.push(hlsPaired(near));\n'
             'console.log(out.join("|"));'
         )
         result = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=10)
@@ -893,7 +996,7 @@ class TestInterfaceAssets(ServerTestCase):
             self.assertTrue(cpc < html.index(ident) < cdl, ident)
         for ident in ('id="cdlOpacity"', 'id="mask"'):
             self.assertTrue(cdl < html.index(ident) < imagery, ident)
-        for ident in ('id="timeWindow"', 'id="emit"', 'id="eco"', 'id="hls"'):
+        for ident in ('id="timeWindow"', 'id="emit"', 'id="eco"', 'id="missionControls"'):
             self.assertTrue(imagery < html.index(ident) < reference, ident)
         for ident in ('id="states"', 'id="rivers"'):
             self.assertGreater(html.index(ident), reference)
@@ -901,6 +1004,7 @@ class TestInterfaceAssets(ServerTestCase):
         text = app.decode()
         self.assertIn("sidebarOpen", text)
         self.assertIn("updateGroupTags", text)
+        self.assertIn('["mission-hls", "HLS"]', text)
         _, _, css = self.get("/static/style.css")
         self.assertIn("details.group[open] > summary .on", css.decode())
 
@@ -1053,22 +1157,33 @@ class TestInterfaceAssets(ServerTestCase):
         self.assertNotIn("emitWindowBounds", text)
         self.assertIn("state.days", text)
 
-    def test_hls_layer_controls_and_routes(self):
+    def test_tiled_controls_are_generated(self):
         _, _, index = self.get("/")
         html = index.decode()
-        for ident in ('id="hls"', 'name="hlsMode"', 'id="hlsRange"', 'id="hlsCloud"',
-                      'name="hlsSensor"', 'id="hlsLegend"'):
-            self.assertIn(ident, html)
-        _, _, app = self.get("/static/app.js")
-        text = app.decode()
-        self.assertIn("/api/hls/tiles.geojson", text)
-        self.assertIn("/api/hls/counts?", text)
-        self.assertIn("HLS_CLASSES", text)
+        self.assertIn('id="missionControls"', html)
+        self.assertIn('src="/static/missions.js"', html)
+        self.assertLess(html.index('src="/static/missions.js"'), html.index('src="/static/app.js"'))
+        for old in ('id="hls"', 'name="hlsMode"', 'id="hlsCloud"', 'name="hlsSensor"', 'id="hlsLegend"'):
+            self.assertNotIn(old, html)
+        _, _, missions = self.get("/static/missions.js")
+        text = missions.decode()
+        for needle in ('"mission-" + key', "-f-", "-mode", "-range", "-legend", "/api/missions/", "/tiles.geojson",
+                       "/counts?start=", "f." , "TILED_CLASSES", "clear acquisitions per MGRS tile", "Missions.init"):
+            self.assertIn(needle, text)
         for colour in ("#e7d4e8", "#c2a5cf", "#9970ab", "#762a83", "#40004b"):
             self.assertIn(colour, text)
-        self.assertIn('map.createPane("hls")', text)
-        self.assertIn("451", text[text.index('map.getPane("hls")'):text.index('map.getPane("hls")') + 80])
-        self.assertIn("setTimeout(fetchHlsCounts, 150)", text)
+        self.assertIn('map.createPane("mission-" + key)', text)
+        self.assertIn("(spec.style && spec.style.pane) || 451", text)
+        self.assertIn("COUNTS_DEBOUNCE_MS = 150", text)
+        _, _, css = self.get("/static/style.css")
+        self.assertIn("#missionControls { display: contents; }", css.decode())
+        self.assertIn("no CPC weeks for this selection: nothing to count", text)
+        _, _, app = self.get("/static/app.js")
+        app_text = app.decode()
+        self.assertNotIn("/api/hls/", app_text)
+        self.assertNotIn("hlsCloud", app_text)
+        self.assertIn('Missions.filter("hls", "cloud")', app_text)
+        self.assertIn("report.missions", app_text)
 
     def test_hls_range_resolves_week_window_and_season(self):
         _, _, app = self.get("/static/app.js")
@@ -1076,16 +1191,17 @@ class TestInterfaceAssets(ServerTestCase):
         if not shutil.which("node"):
             self.skipTest("node not available")
         parts = []
-        for name in ("weekSunday(year, week)", "isoDate(ms)", "hlsRange()"):
+        for name in ("weekSunday(year, week)", "isoDate(ms)", "tiledRange(key)"):
             match = re.search(r"function " + re.escape(name) + r" \{.*?\n  \}", text, re.S)
             self.assertIsNotNone(match, name + " not found in app.js")
             parts.append(match.group(0))
         script = (
-            'var state = { week: 30, year: 2025, days: 7, hlsMode: "week", crop: "corn", var: "cond" };\n'
+            'var state = { week: 30, year: 2025, days: 7, crop: "corn", var: "cond" };\n'
+            'var Missions = { mode: function () { return mode; } }; var mode = "week";\n'
             "function weeksFor() { return [14, 30, 44]; }\n" + "\n".join(parts) + "\n"
-            "var a = hlsRange(); state.hlsMode = \"season\"; var b = hlsRange();\n"
-            "state.days = 0; state.hlsMode = \"week\"; var c = hlsRange();\n"
-            "state.week = null; var d = hlsRange();\n"
+            "var a = tiledRange(\"hls\"); mode = \"season\"; var b = tiledRange(\"hls\");\n"
+            "state.days = 0; mode = \"week\"; var c = tiledRange(\"hls\");\n"
+            "state.week = null; var d = tiledRange(\"hls\");\n"
             "console.log([a.start, a.end, b.start, b.end, c.start, c.end, String(d)].join(\"|\"));"
         )
         result = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=10)
@@ -1099,15 +1215,17 @@ class TestInterfaceAssets(ServerTestCase):
         boot = text[text.index('fetch("/api/catalog")'):]
         self.assertIn(".catch(", boot)
         self.assertIn("Catalog request failed; is the server running? Reload to retry.", boot)
-        self.assertIn("hls_busy", text)
+        self.assertIn("catalog_busy", text)
+        self.assertNotIn("hls_busy", text)
 
     def test_hls_layer_is_gated_on_tile_rings_as_well_as_rows(self):
         _, _, app = self.get("/static/app.js")
         text = app.decode()
-        body = text[text.index("function loadHls"):text.index("function syncEco")]
-        self.assertIn("hls_tiles", body)
-        self.assertIn("HLS tile rings not fetched yet; let ./run.sh hls finish.", body)
-        self.assertIn("HLS store busy; a fetch is in progress. Reload when it finishes.", body)
+        body = text[text.index("function syncHls"):text.index("function syncEco")]
+        self.assertIn("spec.count > 0 && spec.tiles > 0", body)
+        self.assertIn("HLS tile outlines not computed yet; let ./run.sh refresh hls finish.", body)
+        self.assertIn("Catalog busy; a refresh is in progress. Reload when it finishes.", body)
+        self.assertNotIn("hls_tiles", text)
         self.assertIn("g.hls === null", text)
         self.assertIn("no week selected", text)
 
@@ -1159,8 +1277,7 @@ class TestInterfaceAssets(ServerTestCase):
         self.assertNotIn("eco-tag", text)
         self.assertIn('class="tag"', text)
         self.assertIn("g.hls.cloud.toFixed(0)", text)
-        self.assertIn('state.hls && state.hlsMode === "week"', text)
-        self.assertIn("no CPC weeks for this selection: nothing to count", text)
+        self.assertIn('Missions.isOn("hls") && Missions.mode("hls") === "week"', text)
         _, _, css = self.get("/static/style.css")
         self.assertIn(".emit-list .tag", css.decode())
         self.assertNotIn("eco-tag", css.decode())

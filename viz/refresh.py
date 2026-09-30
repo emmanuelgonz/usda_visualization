@@ -89,6 +89,7 @@ def main(argv=None):
             counts = refresh_mission(cat, reg, mission, first=args.first)
             print(f"{mission.key}: {counts['months']} months, {counts['granules']} granules", flush=True)
         finish_grids(cat, reg)
+        cat.analyze()
         for mission in selected:
             summary = cat.summary(mission.key)
             print(f"{mission.key}: {summary['count']} granules over {summary['months']} months in {cat.path}")

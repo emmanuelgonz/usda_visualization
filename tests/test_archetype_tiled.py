@@ -1,6 +1,9 @@
+import shutil
+import tempfile
 import unittest
+from pathlib import Path
 
-from viz import archetypes, cmr, registry
+from viz import archetypes, catalog, cmr, registry
 from viz.archetypes import tiled
 
 HEADER = "Granule UR,Producer Granule ID,Start Time,End Time,Online Access URLs,Browse URLs,Cloud Cover,Day/Night,Size\n"
@@ -17,7 +20,9 @@ MISSION = registry.parse({
         "attributes": {"cloud": {"from": "cloud_cover", "type": "number"},
                        "sensor": {"from": "sensor", "type": "text"},
                        "daynight": {"from": "day_night_flag", "type": "text"}},
-        "filters": [], "browse": {"source": "links", "match": "\\.jpg$"}, "links": {}, "style": {}}]
+        "filters": [{"attribute": "cloud", "control": "max", "default": 30, "label": "Max cloud"},
+                    {"attribute": "sensor", "control": "choice", "values": ["ALL", "L30", "S30"], "default": "ALL", "label": "Sensor"}],
+        "browse": {"source": "links", "match": "\\.jpg$"}, "links": {}, "style": {}}]
 }).mission("hls")
 S30 = MISSION.cmr[1]
 
@@ -108,3 +113,61 @@ class TestPackage(unittest.TestCase):
     def test_get_returns_the_module(self):
         self.assertIs(archetypes.get("tiled"), tiled)
         self.assertEqual(archetypes.NAMES, ("swath", "tiled"))
+
+
+def tiled_row(gid, start, tile, cloud, sensor):
+    return {"id": gid, "start": start, "end": start, "tile": tile, "cloud": cloud, "sensor": sensor}
+
+
+class TestServe(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        self.cat = catalog.Catalog(self.tmp / "c.sqlite")
+        self.addCleanup(self.cat.close)
+        self.cat.replace_month("hls", "2025-07", [
+            tiled_row("a", "2025-07-18T17:00:00Z", "T99ZZZ", 10, "S30"),
+            tiled_row("b", "2025-07-23T17:00:00Z", "T99ZZZ", 10, "S30"),
+            tiled_row("c", "2025-07-20T17:00:00Z", "T98ZZZ", 0, "S30"),
+            tiled_row("d", "2025-07-21T16:00:00Z", "T99ZZZ", 80, "L30"),
+            tiled_row("e", "2025-07-22T16:00:00Z", "T99ZZZ", None, "L30"),
+        ], "x")
+        self.cat.put_tiles("mgrs", [("T99ZZZ", [[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]),
+                                    ("T98ZZZ", [[20, 0], [21, 0], [21, 1], [20, 1], [20, 0]])])
+
+    def test_counts_apply_range_and_filters(self):
+        self.assertEqual(tiled.counts(self.cat, MISSION, "2025-07-15", "2025-07-31", {"cloud": 30, "sensor": "ALL"}),
+                         {"T99ZZZ": 2, "T98ZZZ": 1})
+        self.assertEqual(tiled.counts(self.cat, MISSION, "2025-07-15", "2025-07-31", {"cloud": 30, "sensor": "L30"}), {})
+        self.assertEqual(tiled.counts(self.cat, MISSION, "2025-07-19", "2025-07-22", {"cloud": 100, "sensor": "ALL"}),
+                         {"T99ZZZ": 1, "T98ZZZ": 1})     # the NULL cloud row never counts
+
+    def test_sql_counts_equal_python_passes_counts(self):
+        from viz import filters
+        for values in ({"cloud": 30, "sensor": "ALL"}, {"cloud": 100, "sensor": "L30"}, {"cloud": 10, "sensor": "S30"}):
+            expected = {}
+            for r in self.cat.conn.execute("SELECT tile, cloud, sensor FROM granules WHERE mission = 'hls' "
+                                           "AND substr(start, 1, 10) BETWEEN '2025-07-15' AND '2025-07-31'"):
+                if filters.passes(dict(r), MISSION, values):
+                    expected[r["tile"]] = expected.get(r["tile"], 0) + 1
+            self.assertEqual(tiled.counts(self.cat, MISSION, "2025-07-15", "2025-07-31", values), expected)
+
+    def test_acquisitions_are_oldest_first_with_attributes(self):
+        rows = tiled.acquisitions(self.cat, MISSION, ["T99ZZZ"], "2025-07-15", "2025-07-31")
+        self.assertEqual([(r["date"], r["sensor"], r["cloud"]) for r in rows],
+                         [("2025-07-18", "S30", 10.0), ("2025-07-21", "L30", 80.0), ("2025-07-22", "L30", None), ("2025-07-23", "S30", 10.0)])
+        self.assertEqual(rows[0]["time"], "2025-07-18T17:00:00Z")
+        self.assertEqual(rows[0]["tile"], "T99ZZZ")
+        self.assertEqual(tiled.acquisitions(self.cat, MISSION, [], "2025-07-15", "2025-07-31"), [])
+
+    def test_tiles_geojson(self):
+        geo = tiled.tiles_geojson(self.cat, "mgrs")
+        self.assertEqual([f["properties"]["tile"] for f in geo["features"]], ["T98ZZZ", "T99ZZZ"])
+        self.assertEqual(geo["features"][1]["geometry"]["coordinates"][0][0], [0, 0])
+
+    def test_nearest_clear_ties_to_the_earlier_time(self):
+        rows = [{"date": "2025-07-18", "time": "2025-07-18T17:00:00Z", "sensor": "S30", "cloud": 10.0},
+                {"date": "2025-07-22", "time": "2025-07-22T16:00:00Z", "sensor": "L30", "cloud": 5.0}]
+        self.assertEqual(tiled.nearest_clear(rows, "2025-07-20", 7), {"date": "2025-07-18", "sensor": "S30", "cloud": 10.0, "dt": -2})
+        self.assertIsNone(tiled.nearest_clear(rows, "2025-08-20", 7))
+        self.assertIsNone(tiled.nearest_clear([], "2025-07-20", 7))

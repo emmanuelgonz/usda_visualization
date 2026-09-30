@@ -140,16 +140,17 @@ output { font-variant-numeric: tabular-nums; font-weight: 450; color: var(--mute
 .readout-popup .emit-list .tag { color: var(--muted); font-size: 11px; }
 
 /* HLS coverage */
-#hlsControls { display: grid; gap: 7px; padding-left: 22px; }
-#hlsControls.disabled { opacity: 0.5; }
-#hlsControls .note { margin: 0; font-size: 11px; }
-#hlsLegend { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 11px; color: var(--muted); }
-#hlsLegend span::before {
+#missionControls { display: contents; }   /* generated blocks join the section grid */
+[id^="mission-"][id$="-controls"] { display: grid; gap: 7px; padding-left: 22px; }
+[id^="mission-"][id$="-controls"].disabled { opacity: 0.5; }
+[id^="mission-"][id$="-controls"] .note { margin: 0; font-size: 11px; }
+[id^="mission-"][id$="-legend"] { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 11px; color: var(--muted); }
+[id^="mission-"][id$="-legend"] span::before {
   content: ""; display: inline-block; width: 14px; height: 10px; margin-right: 4px;
   background: var(--swatch); border: 1px solid #40004b; vertical-align: middle; opacity: 0.8;
 }
-#hlsLegend span.zero::before { background: #fff; opacity: 0.4; }
-.leaflet-hls-pane { cursor: default; }
+[id^="mission-"][id$="-legend"] span.zero::before { background: #fff; opacity: 0.4; }
+.leaflet-mission-hls-pane { cursor: default; }
 label .note { font-weight: 450; }
 
 /* EMIT browse viewer: the quicklook shown over the map instead of in a new tab.
