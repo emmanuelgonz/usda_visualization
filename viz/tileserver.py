@@ -15,7 +15,8 @@ from urllib.parse import parse_qs, urlparse
 
 import numpy as np
 
-from viz import basins, coincidence, color, eco_browse, emit, hls, naming, paths, rasters
+from viz import basins, catalog, coincidence, color, eco_browse, emit, filters, naming, paths, rasters, registry
+from viz.archetypes import tiled
 
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -33,8 +34,42 @@ TILE_CPC_RE = re.compile(
     r"/(?P<z>\d+)/(?P<x>\d+)/(?P<y>\d+)\.png$"
 )
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-HLS_SENSORS = ("ALL", "L30", "S30")
-HLS_BUSY = "HLS store busy; a fetch is in progress, retry shortly"
+
+CATALOG_BUSY = "catalog busy; a refresh is in progress, retry shortly"
+NO_CATALOG = "no catalog; run ./run.sh migrate once, then ./run.sh refresh"
+REGISTRY = None      # loaded by load_registry() at start; tests call it too
+
+
+def load_registry(path=None):
+    global REGISTRY
+    REGISTRY = registry.load(path or paths.MISSIONS)
+    return REGISTRY
+
+
+def current_registry():
+    return REGISTRY if REGISTRY is not None else load_registry()
+
+
+def catalog_path():
+    return paths.catalog_db(current_registry().region.name)
+
+
+def catalog_read(work=None):
+    """(value, busy) for one read of this thread's catalog, degraded instead of raised.
+
+    work(entry) runs against the (Catalog, {grid: RingIndex}) pair. value is
+    None when the catalog is absent or locked; busy tells those apart. Any
+    OperationalError that is not a lock is a fault and propagates to the 500 handler.
+    """
+    try:
+        entry = catalog.catalog_for(catalog_path())
+        if entry is None:
+            return None, False
+        return (entry if work is None else work(entry)), False
+    except catalog.BUSY as exc:
+        if not catalog.is_busy(exc):
+            raise
+        return None, True
 
 # Changes on every server start. The interface appends it to tile URLs so the
 # browser's HTTP cache is invalidated whenever the server (and so any palette
@@ -132,47 +167,24 @@ def render_cpc_tile(crop, var, year, week, z, x, y, mask_year=None):
     return _cached(key, z, x, y, render)
 
 
-def hls_read(work=None):
-    """(value, busy) for one read of this thread's HLS store, degraded instead of raised.
+def tiled_block(cat, indexes, mission, lon, lat, granules, start, end, values, window):
+    """The point's tiles over [start, end] for a tiled mission, and a nearest-clear tag on each EMIT granule.
 
-    work(entry) runs against the (Store, TileIndex) pair and defaults to
-    returning the pair itself, so a route can look for the store before it
-    validates parameters. value is None when the store is absent or locked, and
-    busy tells those apart: a fetch committing a month holds the write lock, so
-    the read-only connection gives up after half a second and raises hls.BUSY.
-    Any other OperationalError is a genuine fault and propagates to the 500 handler.
+    granules are copies, never the index's own dicts. A granule's "hls" key is
+    absent when no tile covers the point, None when no clear acquisition lies
+    within the window. start and end are None without a range or week, and
+    every tile then lists no acquisitions.
     """
-    try:
-        entry = hls.store_for(paths.HLS_DB)
-        if entry is None:
-            return None, False
-        return (entry if work is None else work(entry)), False
-    except hls.BUSY as exc:
-        if "locked" not in str(exc) and "busy" not in str(exc):
-            raise                  # a genuine query fault is a 500, not "fetch in progress"
-        return None, True
-
-
-def hls_block(lon, lat, tile_index, store, granules, start, end, cloud, sensor, window):
-    """The point's HLS tiles over [start, end], and a nearest-clear tag on each EMIT granule.
-
-    granules are copies, never the index's own dicts, so the tag does not
-    poison the shared FootprintIndex. A granule's "hls" key is absent when no
-    tile ring covers the point, and None when a covering tile holds no clear
-    acquisition within the window. start and end are None when no range and no
-    week were given, and every tile then lists no acquisitions.
-    """
-    tiles = tile_index.covering(lon, lat)
-    block = {"start": start, "end": end, "cloud": cloud, "sensor": sensor, "window": window, "tiles": []}
+    index = indexes.get(mission.grid)
+    tiles = index.covering(lon, lat) if index else []
+    block = {"start": start, "end": end, "cloud": values["cloud"], "sensor": values["sensor"], "window": window, "tiles": []}
     if not tiles:
         return block
-    rows = store.acquisitions(tiles, start, end) if start and end else []
+    rows = tiled.acquisitions(cat, mission, tiles, start, end) if start and end else []
     for tile in tiles:
-        acq = [{"date": r["date"], "time": r["time"], "sensor": r["sensor"], "cloud": r["cloud"]}
-               for r in rows if r["tile"] == tile]
-        clear = sum(1 for r in acq if hls.is_clear(r, cloud, sensor))
+        acq = [{"date": r["date"], "time": r["time"], "sensor": r["sensor"], "cloud": r["cloud"]} for r in rows if r["tile"] == tile]
+        clear = sum(1 for r in acq if filters.passes(r, mission, values))
         block["tiles"].append({"tile": tile, "clear": clear, "acq": acq})
-
     dated = [g for g in granules if g.get("start")]
     clear_rows = []
     if dated:
@@ -180,9 +192,9 @@ def hls_block(lon, lat, tile_index, store, granules, start, end, cloud, sensor, 
         last = max(g["start"][:10] for g in dated)
         lo = (datetime.date.fromisoformat(first) - datetime.timedelta(days=window)).isoformat()
         hi = (datetime.date.fromisoformat(last) + datetime.timedelta(days=window)).isoformat()
-        clear_rows = [r for r in store.acquisitions(tiles, lo, hi) if hls.is_clear(r, cloud, sensor)]
+        clear_rows = [r for r in tiled.acquisitions(cat, mission, tiles, lo, hi) if filters.passes(r, mission, values)]
     for g in granules:
-        g["hls"] = hls.nearest_clear(clear_rows, g["start"][:10], window) if g.get("start") else None
+        g["hls"] = tiled.nearest_clear(clear_rows, g["start"][:10], window) if g.get("start") else None
     return block
 
 
@@ -245,9 +257,11 @@ def point_report(lon, lat, crop, year, cdl_year, week=None, hls_params=None):
             params["end"] = (centre + span).isoformat()
         else:
             params["start"] = params["end"] = None   # no range to list over; the tags still run
-    hls_report, _ = hls_read(lambda entry: hls_block(
-        lon, lat, entry[1], entry[0], granules, params["start"], params["end"],
-        params.get("cloud", 30), params.get("sensor", "ALL"), params.get("window", 7)))
+    hls_mission = current_registry().missions.get("hls")
+    values = {"cloud": params.get("cloud", 30), "sensor": params.get("sensor", "ALL")}
+    missions_report, _ = catalog_read(lambda entry: {"hls": tiled_block(
+        entry[0], entry[1], hls_mission, lon, lat, granules, params["start"], params["end"], values, params.get("window", 7))}) \
+        if hls_mission else (None, False)
 
     return {
         "lon": lon,
@@ -263,7 +277,7 @@ def point_report(lon, lat, crop, year, cdl_year, week=None, hls_params=None):
         "eco": eco_swaths,
         "week_sunday": sunday,
         "basins": basin_units(lon, lat),
-        "hls": hls_report,
+        "missions": missions_report,
     }
 
 
@@ -325,12 +339,23 @@ class Handler(BaseHTTPRequestHandler):
                 catalog["coincident_15min"] = index.count_where(
                     lambda p: bool(p.get("eco")) and abs(p["eco"][0]["dt"]) <= coincidence.SAME_PASS
                 ) if index else 0
-                summary, busy = hls_read(lambda entry: entry[0].summary())
-                summary = summary or {"count": 0, "fetched": None, "tiles": 0}
-                catalog["hls_count"] = summary["count"]
-                catalog["hls_tiles"] = summary["tiles"]
-                catalog["hls_fetched"] = summary["fetched"]
-                catalog["hls_busy"] = busy
+                def mission_rows(entry):
+                    cat, indexes = entry
+                    rows = []
+                    for m in current_registry().missions.values():
+                        summary = cat.summary(m.key)
+                        rows.append({"key": m.key, "name": m.name, "label": m.label, "archetype": m.archetype,
+                                     "grid": m.grid, "filters": filters.describe(m), "style": m.style,
+                                     "count": summary["count"], "fetched": summary["fetched"],
+                                     "tiles": indexes[m.grid].count if m.grid and m.grid in indexes else 0})
+                    return rows
+                missions, busy = catalog_read(mission_rows)
+                if missions is None:
+                    missions = [{"key": m.key, "name": m.name, "label": m.label, "archetype": m.archetype, "grid": m.grid,
+                                 "filters": filters.describe(m), "style": m.style, "count": 0, "fetched": None, "tiles": 0}
+                                for m in current_registry().missions.values()]
+                catalog["missions"] = missions
+                catalog["catalog_busy"] = busy
                 return self._send(json.dumps(catalog).encode(), CONTENT_TYPES[".json"])
 
             if route == "/api/emit/footprints.geojson":
@@ -343,19 +368,12 @@ class Handler(BaseHTTPRequestHandler):
                     return self._fail(HTTPStatus.NOT_FOUND, "no ECOSTRESS footprints; run ./run.sh footprints")
                 return self._send(paths.ECO_FOOTPRINTS.read_bytes(), CONTENT_TYPES[".geojson"])
 
-            if route == "/api/hls/tiles.geojson":
-                geo, busy = hls_read(lambda entry: entry[0].tiles_geojson_bytes())
-                if busy:
-                    return self._fail(HTTPStatus.SERVICE_UNAVAILABLE, HLS_BUSY)
-                if geo is None:
-                    return self._fail(HTTPStatus.NOT_FOUND, "no HLS store; run ./run.sh hls")
-                return self._send(geo, CONTENT_TYPES[".geojson"])
-
-            if route == "/api/hls/counts":
-                return self._handle_hls_counts(query)
-
             if route == "/api/eco/browse":
                 return self._handle_eco_browse(query)
+
+            match = re.match(r"^/api/missions/([a-z][a-z0-9_]*)/(tiles\.geojson|counts)$", route)
+            if match:
+                return self._handle_mission(match.group(1), match.group(2), query)
 
             if route == "/api/point":
                 return self._handle_point(query)
@@ -407,8 +425,8 @@ class Handler(BaseHTTPRequestHandler):
         self._send(render_cpc_tile(crop, var, year, week, z, x, y, mask_year),
                    "image/png", cache=True)
 
-    def _hls_params(self, query, required):
-        """Validated HLS parameters, or (None, message). Missing optional ones take defaults."""
+    def _range_params(self, query, required):
+        """Validated range parameters, or (None, message). Missing optional ones take defaults."""
         params = {}
         given = [key for key in ("start", "end") if key in query]
         if required and len(given) < 2:
@@ -434,25 +452,46 @@ class Handler(BaseHTTPRequestHandler):
         if not (0 <= params["cloud"] <= 100) or not (0 <= params["window"] <= 60):
             return None, "cloud must be 0-100 and window 0-60"
         params["sensor"] = query["sensor"][0] if "sensor" in query else "ALL"
-        if params["sensor"] not in HLS_SENSORS:
+        if params["sensor"] not in ("ALL", "L30", "S30"):   # the point route only, until the readout generalizes
             return None, "sensor must be ALL, L30, or S30"
         return params, None
 
-    def _handle_hls_counts(self, query):
-        entry, busy = hls_read()
+    def _handle_mission(self, key, what, query):
+        mission = current_registry().missions.get(key)
+        if mission is None:
+            return self._fail(HTTPStatus.NOT_FOUND, "unknown mission")
+        if mission.archetype != "tiled":
+            return self._fail(HTTPStatus.NOT_FOUND, f"mission {key} is not tiled")
+        entry, busy = catalog_read()
         if busy:
-            return self._fail(HTTPStatus.SERVICE_UNAVAILABLE, HLS_BUSY)
+            return self._fail(HTTPStatus.SERVICE_UNAVAILABLE, CATALOG_BUSY)
         if entry is None:
-            return self._fail(HTTPStatus.NOT_FOUND, "no HLS store; run ./run.sh hls")
-        params, message = self._hls_params(query, required=True)
+            return self._fail(HTTPStatus.NOT_FOUND, NO_CATALOG)
+        if what == "tiles.geojson":
+            geo, busy = catalog_read(lambda opened: self._tiles_bytes(opened[0], mission.grid))
+            if busy:
+                return self._fail(HTTPStatus.SERVICE_UNAVAILABLE, CATALOG_BUSY)
+            return self._send(geo or b'{"type": "FeatureCollection", "features": []}', CONTENT_TYPES[".geojson"])
+        params, message = self._range_params(query, required=True)
         if params is None:
             return self._fail(HTTPStatus.BAD_REQUEST, message)
-        counts, busy = hls_read(lambda opened: opened[0].counts(
-            params["start"], params["end"], params["cloud"], params["sensor"]))
+        try:
+            values = filters.parse(mission, query)
+        except filters.FilterError as exc:
+            return self._fail(HTTPStatus.BAD_REQUEST, str(exc))
+        counts, busy = catalog_read(lambda opened: tiled.counts(opened[0], mission, params["start"], params["end"], values))
         if busy:
-            return self._fail(HTTPStatus.SERVICE_UNAVAILABLE, HLS_BUSY)
-        # counts is None only if the store vanished between the two reads.
+            return self._fail(HTTPStatus.SERVICE_UNAVAILABLE, CATALOG_BUSY)
         self._send(json.dumps({"counts": counts or {}}).encode(), CONTENT_TYPES[".json"])
+
+    @staticmethod
+    def _tiles_bytes(cat, grid):
+        cache = getattr(cat, "_tiles_bytes", None)
+        if cache is None:
+            cache = cat._tiles_bytes = {}
+        if grid not in cache:
+            cache[grid] = json.dumps(tiled.tiles_geojson(cat, grid)).encode()
+        return cache[grid]
 
     def _handle_eco_browse(self, query):
         try:
@@ -492,7 +531,7 @@ class Handler(BaseHTTPRequestHandler):
                                "lon, lat, year, cdl_year must be numeric")
         if week is not None and not (1 <= week <= 53):
             return self._fail(HTTPStatus.BAD_REQUEST, "week must be 1-53")
-        hls_params, message = self._hls_params(query, required=False)
+        hls_params, message = self._range_params(query, required=False)
         if hls_params is None:
             return self._fail(HTTPStatus.BAD_REQUEST, message)
         report = point_report(lon, lat, query["crop"][0], year, cdl_year, week, hls_params=hls_params)
@@ -507,6 +546,12 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Serve the CPC-over-CDL map locally.")
     parser.add_argument("--port", type=int, default=8000)
     args = parser.parse_args(argv)
+
+    try:
+        load_registry()
+    except registry.RegistryError as exc:
+        print(f"registry: {exc}", file=sys.stderr)
+        return 2
 
     if not paths.CATALOG.is_file():
         print("catalog.json missing; run ./run.sh prepare first", file=sys.stderr)
