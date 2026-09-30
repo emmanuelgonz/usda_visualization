@@ -116,6 +116,9 @@ case "${1:-}" in
     if [ ! -f data/hls/hls.sqlite ]; then
       echo "note: no HLS store (data/hls/hls.sqlite); the HLS layer is off until ./run.sh hls is run" >&2
     fi
+    if [ ! -f data/catalog/conus.sqlite ]; then
+      echo "note: no region catalog (data/catalog/conus.sqlite); run ./run.sh migrate once, then ./run.sh refresh" >&2
+    fi
     exec python3 -m viz.tileserver "$@"
     ;;
   # -t . keeps the repo root as the top-level import dir so `from viz import ...`
