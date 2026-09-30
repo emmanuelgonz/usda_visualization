@@ -112,6 +112,50 @@ class TestLoadReaches(RiverFixtures):
         self.assertIsNone(reaches[10]["next"])
 
 
+class TestSwappedSources(unittest.TestCase):
+    """Clear failures for a source without a spatial reference or with null geometries."""
+
+    def memory_layer(self, srs, fields):
+        dataset = ogr.GetDriverByName("Memory").CreateDataSource("swapped")
+        layer = dataset.CreateLayer("swapped", srs, ogr.wkbLineString)
+        for field, kind in fields:
+            layer.CreateField(ogr.FieldDefn(field, kind))
+        return dataset, layer
+
+    def add(self, layer, values, box):
+        feature = ogr.Feature(layer.GetLayerDefn())
+        for field, value in values.items():
+            feature.SetField(field, value)
+        if box is not None:
+            feature.SetGeometry(line(*box))
+        layer.CreateFeature(feature)
+
+    def test_to_wgs84_names_the_layer_without_a_spatial_reference(self):
+        dataset, layer = self.memory_layer(None, [("ORD_STRA", ogr.OFTInteger)])
+        with self.assertRaisesRegex(ValueError, "swapped has no spatial reference"):
+            vendor_rivers.to_wgs84(layer)
+
+    def test_load_reaches_skips_a_null_geometry(self):
+        srs = osr.SpatialReference()
+        srs.ImportFromEPSG(4326)
+        fields = [("HYRIV_ID", ogr.OFTInteger), ("NEXT_DOWN", ogr.OFTInteger), ("ORD_STRA", ogr.OFTInteger),
+                  ("DIS_AV_CMS", ogr.OFTReal), ("UPLAND_SKM", ogr.OFTReal)]
+        dataset, layer = self.memory_layer(srs, fields)
+        base = {"NEXT_DOWN": 0, "DIS_AV_CMS": 1.0, "UPLAND_SKM": 2.0}
+        self.add(layer, {**base, "HYRIV_ID": 1, "ORD_STRA": 5}, (-100.02, 40.0, -100.01, 40.01))
+        self.add(layer, {**base, "HYRIV_ID": 2, "ORD_STRA": 5}, None)
+        reaches = vendor_rivers.load_reaches(layer)
+        self.assertEqual(sorted(reaches), [1])
+
+    def test_reference_lines_skips_a_null_geometry(self):
+        srs = osr.SpatialReference()
+        srs.ImportFromEPSG(4326)
+        dataset, layer = self.memory_layer(srs, [("name", ogr.OFTString), ("featurecla", ogr.OFTString)])
+        self.add(layer, {"name": "Missouri", "featurecla": "River"}, (-100.02, 40.0, -100.01, 40.01))
+        self.add(layer, {"name": "Ghost", "featurecla": "River"}, None)
+        self.assertEqual([name for name, _ in vendor_rivers.reference_lines([layer])], ["Missouri"])
+
+
 class TestReferenceLines(RiverFixtures):
     def test_keeps_rivers_intermittent_rivers_and_lake_centerlines_in_the_box(self):
         lines = vendor_rivers.reference_lines([self.ne_a_layer, self.ne_b_layer])

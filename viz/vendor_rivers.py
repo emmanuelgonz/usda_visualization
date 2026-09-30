@@ -39,7 +39,9 @@ MIN_ORDER = 4                          # lowest Strahler order kept
 def to_wgs84(layer):
     """A CoordinateTransformation to EPSG:4326, or None when already geographic WGS84."""
     srs = layer.GetSpatialRef()
-    if srs is not None and srs.IsGeographic():
+    if srs is None:
+        raise ValueError(f"{layer.GetName()} has no spatial reference")
+    if srs.IsGeographic():
         if srs.GetAuthorityCode(None) == "4326" or srs.GetAttrValue("DATUM") in (
                 "WGS_1984", "World Geodetic System 1984"):
             return None
@@ -64,7 +66,7 @@ def load_reaches(layer):
     reaches = {}
     for feature in layer:
         order = feature.GetField("ORD_STRA")
-        if order is None or order < MIN_ORDER:
+        if order is None or order < MIN_ORDER or feature.GetGeometryRef() is None:
             continue
         geometry = _exported(feature.GetGeometryRef().Clone(), transform)
         parts = geometry["coordinates"] if geometry["type"] == "MultiLineString" else [geometry["coordinates"]]
@@ -89,7 +91,7 @@ def reference_lines(layers):
             if feature.GetField("featurecla") not in REFERENCE_CLASSES:
                 continue
             name = (feature.GetField("name") or "").strip()
-            if not name:
+            if not name or feature.GetGeometryRef() is None:
                 continue
             geometry = _exported(feature.GetGeometryRef().Clone(), transform)
             parts = geometry["coordinates"] if geometry["type"] == "MultiLineString" else [geometry["coordinates"]]

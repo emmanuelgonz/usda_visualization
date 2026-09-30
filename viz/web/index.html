@@ -26,19 +26,19 @@
     <summary>Crop progress (CPC)<span class="on"></span></summary>
     <section class="controls">
       <label>Crop
-        <select id="crop"></select>
+        <select autocomplete="off" id="crop"></select>
       </label>
       <label>Variable
-        <select id="var"></select>
+        <select autocomplete="off" id="var"></select>
       </label>
       <label>CPC year
-        <select id="year"></select>
+        <select autocomplete="off" id="year"></select>
       </label>
     </section>
 
     <section class="controls">
       <label>Week <output id="weekOut"></output>
-        <input type="range" id="week" min="0" max="0" step="1">
+        <input autocomplete="off" type="range" id="week" min="0" max="0" step="1">
       </label>
       <div class="row">
         <button id="play" type="button">Play</button>
@@ -49,15 +49,15 @@
 
     <section class="controls">
       <div class="pair">
-        <label class="inline"><input type="checkbox" id="cpc" checked> CPC layer</label>
+        <label class="inline"><input autocomplete="off" type="checkbox" id="cpc" checked> CPC layer</label>
         <label>CPC opacity <output id="opacityOut">70%</output>
-          <input type="range" id="opacity" min="0" max="100" step="5" value="70">
+          <input autocomplete="off" type="range" id="opacity" min="0" max="100" step="5" value="70">
         </label>
       </div>
       <fieldset>
         <legend>Display</legend>
-        <label class="inline"><input type="radio" name="mode" value="overlay" checked> Overlay</label>
-        <label class="inline"><input type="radio" name="mode" value="swipe"> Swipe</label>
+        <label class="inline"><input autocomplete="off" type="radio" name="mode" value="overlay" checked> Overlay</label>
+        <label class="inline"><input autocomplete="off" type="radio" name="mode" value="swipe"> Swipe</label>
       </fieldset>
     </section>
 
@@ -68,18 +68,18 @@
     <summary>Cropland (CDL)<span class="on"></span></summary>
     <section class="controls">
       <label>CDL year
-        <select id="cdlYear"></select>
+        <select autocomplete="off" id="cdlYear"></select>
       </label>
       <div class="pair">
-        <label class="inline"><input type="checkbox" id="cdl" checked> CDL base layer</label>
+        <label class="inline"><input autocomplete="off" type="checkbox" id="cdl" checked> CDL base layer</label>
         <label>CDL opacity <output id="cdlOpacityOut">100%</output>
-          <input type="range" id="cdlOpacity" min="0" max="100" step="5" value="100">
+          <input autocomplete="off" type="range" id="cdlOpacity" min="0" max="100" step="5" value="100">
         </label>
       </div>
-      <label class="inline"><input type="checkbox" id="mask"> Mask to crop extent</label>
+      <label class="inline"><input autocomplete="off" type="checkbox" id="mask"> Mask to crop extent</label>
     <div class="inline sub" id="dimRow">Off-crop:
-      <label class="inline"><input type="radio" name="dim" value="white" checked> White</label>
-      <label class="inline"><input type="radio" name="dim" value="grey"> Grey</label>
+      <label class="inline"><input autocomplete="off" type="radio" name="dim" value="white" checked> White</label>
+      <label class="inline"><input autocomplete="off" type="radio" name="dim" value="grey"> Grey</label>
     </div>
     </section>
   </details>
@@ -88,46 +88,46 @@
     <summary>Satellite imagery<span class="on"></span></summary>
     <section class="controls">
     <label>Time window ±days <output id="timeWindowOut">7</output>
-      <input type="range" id="timeWindow" min="0" max="30" step="1" value="7">
+      <input autocomplete="off" type="range" id="timeWindow" min="0" max="30" step="1" value="7">
       <span class="note">Around the selected CPC week's Sunday; drives the EMIT highlight and the HLS week window.</span>
     </label>
-    <label class="inline"><input type="checkbox" id="emit"> EMIT footprints</label>
+    <label class="inline"><input autocomplete="off" type="checkbox" id="emit"> EMIT footprints</label>
     <div class="sub" id="emitControls">
       <label>Max cloud cover <output id="emitCloudOut">30%</output>
-        <input type="range" id="emitCloud" min="0" max="100" step="5" value="30">
+        <input autocomplete="off" type="range" id="emitCloud" min="0" max="100" step="5" value="30">
       </label>
-      <label class="inline"><input type="checkbox" id="emitOnlyWindow"> Only scenes within window</label>
-      <label class="inline"><input type="checkbox" id="coincide"> Mark ECOSTRESS coincidence</label>
-      <label class="inline"><input type="checkbox" id="coincideAll"> Mark ECOSTRESS + HLS coincidence</label>
+      <label class="inline"><input autocomplete="off" type="checkbox" id="emitOnlyWindow"> Only scenes within window</label>
+      <label class="inline"><input autocomplete="off" type="checkbox" id="coincide"> Mark ECOSTRESS coincidence</label>
+      <label class="inline"><input autocomplete="off" type="checkbox" id="coincideAll"> Mark ECOSTRESS + HLS coincidence</label>
       <label>Coincidence window <output id="coincideWindowOut">15 min</output>
-        <input type="range" id="coincideWindow" min="0" max="8" step="1" value="2">
+        <input autocomplete="off" type="range" id="coincideWindow" min="0" max="8" step="1" value="2">
       </label>
-      <label class="inline"><input type="checkbox" id="coincideOnly"> Only coincident scenes</label>
+      <label class="inline"><input autocomplete="off" type="checkbox" id="coincideOnly"> Only coincident scenes</label>
       <div id="emitLegend"></div>
     </div>
-    <label class="inline"><input type="checkbox" id="eco"> ECOSTRESS swaths</label>
+    <label class="inline"><input autocomplete="off" type="checkbox" id="eco"> ECOSTRESS swaths</label>
     <div class="sub" id="ecoControls">
       <div class="inline">
-        <label class="inline"><input type="radio" name="ecoDay" value="DAY" checked> Day</label>
-        <label class="inline"><input type="radio" name="ecoDay" value="NIGHT"> Night</label>
-        <label class="inline"><input type="radio" name="ecoDay" value="ALL"> Both</label>
+        <label class="inline"><input autocomplete="off" type="radio" name="ecoDay" value="DAY" checked> Day</label>
+        <label class="inline"><input autocomplete="off" type="radio" name="ecoDay" value="NIGHT"> Night</label>
+        <label class="inline"><input autocomplete="off" type="radio" name="ecoDay" value="ALL"> Both</label>
       </div>
       <div id="ecoLegend"></div>
     </div>
-    <label class="inline"><input type="checkbox" id="hls"> HLS coverage</label>
+    <label class="inline"><input autocomplete="off" type="checkbox" id="hls"> HLS coverage</label>
     <div class="sub" id="hlsControls">
       <div class="inline">Mode:
-        <label class="inline"><input type="radio" name="hlsMode" value="week" checked> Week window</label>
-        <label class="inline"><input type="radio" name="hlsMode" value="season"> Season</label>
+        <label class="inline"><input autocomplete="off" type="radio" name="hlsMode" value="week" checked> Week window</label>
+        <label class="inline"><input autocomplete="off" type="radio" name="hlsMode" value="season"> Season</label>
       </div>
       <div class="note" id="hlsRange"></div>
       <label>Max cloud <output id="hlsCloudOut">30%</output>
-        <input type="range" id="hlsCloud" min="0" max="100" step="5" value="30">
+        <input autocomplete="off" type="range" id="hlsCloud" min="0" max="100" step="5" value="30">
       </label>
       <div class="inline">Sensor:
-        <label class="inline"><input type="radio" name="hlsSensor" value="ALL" checked> Both</label>
-        <label class="inline"><input type="radio" name="hlsSensor" value="L30"> L30</label>
-        <label class="inline"><input type="radio" name="hlsSensor" value="S30"> S30</label>
+        <label class="inline"><input autocomplete="off" type="radio" name="hlsSensor" value="ALL" checked> Both</label>
+        <label class="inline"><input autocomplete="off" type="radio" name="hlsSensor" value="L30"> L30</label>
+        <label class="inline"><input autocomplete="off" type="radio" name="hlsSensor" value="S30"> S30</label>
       </div>
       <div id="hlsLegend"></div>
     </div>
@@ -138,10 +138,10 @@
   <details class="group" data-group="reference">
     <summary>Reference layers<span class="on"></span></summary>
     <section class="controls">
-    <label class="inline"><input type="checkbox" id="states" checked> State boundaries</label>
-    <label class="inline"><input type="checkbox" id="basins2"> River basins (HUC2 regions)</label>
-    <label class="inline"><input type="checkbox" id="basins4"> Subbasins (HUC4 subregions)</label>
-    <label class="inline"><input type="checkbox" id="rivers"> Rivers (HydroRIVERS network)</label>
+    <label class="inline"><input autocomplete="off" type="checkbox" id="states" checked> State boundaries</label>
+    <label class="inline"><input autocomplete="off" type="checkbox" id="basins2"> River basins (HUC2 regions)</label>
+    <label class="inline"><input autocomplete="off" type="checkbox" id="basins4"> Subbasins (HUC4 subregions)</label>
+    <label class="inline"><input autocomplete="off" type="checkbox" id="rivers"> Rivers (HydroRIVERS network)</label>
     </section>
   </details>
 
