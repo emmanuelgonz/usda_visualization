@@ -521,23 +521,25 @@ class TestMissionRoutes(ServerTestCase):
         from viz import catalog as catalog_module
         cat = catalog_module.Catalog(paths.catalog_db("CONUS"))
         cat.put_tiles("mgrs", [("T97ZZZ", square(self.lon + 0.2, self.lat, 0.5))])
-        cat.replace_month("hls", "2025-06", [
-            {"id": "HLS.S30.T97ZZZ.2025180T170000.v2.0", "start": "2025-06-29T17:00:00Z", "end": "2025-06-29T17:00:00Z",
-             "tile": "T97ZZZ", "cloud": 0, "sensor": "S30"}], "x")
+        cat.conn.execute("INSERT INTO granules (mission, id, start, end, tile, cloud, sensor) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                         ("hls", "HLS.S30.T97ZZZ.2025200T170000.v2.0", "2025-07-19T17:00:00Z", "2025-07-19T17:00:00Z",
+                          "T97ZZZ", 0, "S30"))
+        cat.conn.commit()
         cat.close()
         stamp = os.stat(paths.catalog_db("CONUS")).st_mtime_ns + 1_000_000
         os.utime(paths.catalog_db("CONUS"), ns=(stamp, stamp))
         try:
-            report = json.loads(self.get(self.point_url() + "&start=2025-06-15&end=2025-07-31&cloud=30&sensor=ALL&window=30")[2])
+            report = json.loads(self.get(self.point_url() + "&start=2025-07-15&end=2025-07-31&cloud=30&sensor=ALL&window=7")[2])
             tiles = {t["tile"]: t for t in report["missions"]["hls"]["tiles"]}
             self.assertEqual(sorted(tiles), ["T97ZZZ", "T99ZZZ"])
-            self.assertEqual([a["date"] for a in tiles["T97ZZZ"]["acq"]], ["2025-06-29"])
+            self.assertEqual([a["date"] for a in tiles["T97ZZZ"]["acq"]], ["2025-07-19"])
             self.assertEqual(tiles["T99ZZZ"]["clear"], 2)
+            by_id = {g["id"]: g for g in report["emit"]}
+            self.assertEqual(by_id["near-new"]["hls"], {"date": "2025-07-19", "sensor": "S30", "cloud": 0.0, "dt": -1})
         finally:
             cat = catalog_module.Catalog(paths.catalog_db("CONUS"))
             cat.conn.execute("DELETE FROM tiles WHERE tile = 'T97ZZZ'")
             cat.conn.execute("DELETE FROM granules WHERE tile = 'T97ZZZ'")
-            cat.conn.execute("DELETE FROM months WHERE mission = 'hls' AND month = '2025-06'")
             cat.conn.commit()
             cat.close()
             stamp = os.stat(paths.catalog_db("CONUS")).st_mtime_ns + 1_000_000

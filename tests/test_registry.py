@@ -41,6 +41,7 @@ class TestRealFile(unittest.TestCase):
         hls = reg.mission("hls")
         self.assertEqual(hls.tile_from.pattern.match("HLS.S30.T15TVH.2025203T170849.v2.0").group(1), "T15TVH")
         self.assertEqual(hls.cmr[0].implies, {"sensor": "L30"})
+        self.assertEqual(hls.attributes["cloud"].type, "int")
         self.assertEqual(reg.mission("eco").footprint, "box")
         self.assertEqual(reg.mission("emit").filters[0].default, 30)
 

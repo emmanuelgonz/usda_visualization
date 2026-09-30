@@ -95,6 +95,10 @@ def fetch_month(mission, collection, bbox, month, fetch_fn=cmr.fetch_response):
     return [r for r in rows if start <= r["start"][:10] < end]
 
 
+def _day_after(end):
+    return (datetime.date.fromisoformat(end) + datetime.timedelta(days=1)).isoformat()
+
+
 def counts(cat, mission, start, end, values):
     """Clear acquisitions per tile over the inclusive date range, filters applied in SQL; zero tiles omitted.
 
@@ -102,7 +106,7 @@ def counts(cat, mission, start, end, values):
     The range on start (not substr) keeps the start indexes usable; the planner
     needs the statistics Catalog.analyze() records to pick them over the tile index.
     """
-    stop = (datetime.date.fromisoformat(end) + datetime.timedelta(days=1)).isoformat()
+    stop = _day_after(end)
     where = ["mission = ?", "tile IS NOT NULL", "start >= ?", "start < ?"]
     args = [mission.key, start, stop]
     for control in mission.filters:
@@ -124,9 +128,9 @@ def acquisitions(cat, mission, tiles, start, end):
         return []
     marks = ",".join("?" * len(tiles))
     sql = (f"SELECT tile, start, cloud, sensor, daynight, orbit FROM granules WHERE mission = ? "
-           f"AND tile IN ({marks}) AND substr(start, 1, 10) BETWEEN ? AND ? ORDER BY start, tile")
+           f"AND tile IN ({marks}) AND start >= ? AND start < ? ORDER BY start, tile")
     rows = []
-    for row in cat.conn.execute(sql, [mission.key, *tiles, start, end]):
+    for row in cat.conn.execute(sql, [mission.key, *tiles, start, _day_after(end)]):
         item = {"tile": row["tile"], "date": row["start"][:10], "time": row["start"]}
         for name in mission.attributes:
             item[name] = row[name] if name in row.keys() else None

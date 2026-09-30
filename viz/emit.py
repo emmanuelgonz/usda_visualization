@@ -11,7 +11,7 @@ import os
 import threading
 from pathlib import Path
 
-from viz.spatial import point_in_ring  # noqa: F401  (re-exported; the index below and viz.hls use it)
+from viz.spatial import point_in_ring  # noqa: F401  (re-exported; the index below and viz.basins use it)
 
 
 def week_sunday(year, week):
