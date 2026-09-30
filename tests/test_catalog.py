@@ -37,6 +37,13 @@ class TestCatalog(unittest.TestCase):
         indexes = {r[0] for r in self.cat.conn.execute("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'granules_%'")}
         self.assertEqual(indexes, {"granules_mission_start", "granules_mission_tile", "granules_mission_lat"})
 
+    def test_bulk_mode_sets_pragmas(self):
+        self.cat.bulk_mode()
+        self.assertEqual(self.cat.conn.execute("PRAGMA synchronous").fetchone()[0], 0)
+        self.assertEqual(self.cat.conn.execute("PRAGMA journal_mode").fetchone()[0], "memory")
+        self.cat.replace_month("sw", "2025-07", [swath_row("a", "2025-07-02T10:00:00Z")], "2025-08-01T00:00:00+00:00")
+        self.assertEqual(self.cat.conn.execute("SELECT COUNT(*) FROM granules").fetchone()[0], 1)
+
     def test_replace_month_twice_gives_the_same_rows_and_records_the_fetch(self):
         rows = [swath_row("a", "2025-07-02T10:00:00Z", cloud=5.0), swath_row("b", "2025-07-30T10:00:00Z")]
         self.cat.replace_month("sw", "2025-07", rows, "2025-08-01T00:00:00+00:00")

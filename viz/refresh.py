@@ -83,6 +83,7 @@ def main(argv=None):
         return 2
     selected = [reg.mission(k) for k in args.missions] or list(reg.missions.values())
     cat = catalog.Catalog(args.catalog or paths.catalog_db(reg.region.name))
+    cat.bulk_mode()
     try:
         for mission in selected:
             counts = refresh_mission(cat, reg, mission, first=args.first)

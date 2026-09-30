@@ -88,6 +88,18 @@ class Catalog:
     def close(self):
         self.conn.close()
 
+    def bulk_mode(self):
+        """Favor write speed over crash safety for a long import or refresh.
+
+        Sets synchronous=OFF, an in-memory journal, and a 256 MB page cache.
+        This trades crash safety for speed on a catalog that is always
+        rebuildable from CMR; a refresh interrupted mid-month may need to be
+        rerun, and a crash can leave the file corrupt.
+        """
+        self.conn.execute("PRAGMA synchronous=OFF")
+        self.conn.execute("PRAGMA journal_mode=MEMORY")
+        self.conn.execute("PRAGMA cache_size=-262144")
+
     # --- writes ---
 
     def replace_month(self, mission, month, rows, fetched_at):

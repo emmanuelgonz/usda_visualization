@@ -89,6 +89,12 @@ case "${1:-}" in
     shift
     exec python3 -m viz.refresh "$@"
     ;;
+  migrate)
+    # One-time import of data/hls/hls.sqlite and the EMIT and ECOSTRESS footprint
+    # files into the region catalog, so nothing is fetched again. Safe to rerun.
+    shift
+    exec python3 -m viz.migrate "$@"
+    ;;
   serve)
     shift
     if [ ! -f viz/web/vendor/leaflet/leaflet.js ] || [ ! -f viz/web/vendor/states.geojson ]; then
