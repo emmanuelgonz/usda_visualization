@@ -1,0 +1,157 @@
+"""The per-region catalog: one SQLite file holding every mission's granules.
+
+Written by viz/refresh.py and viz/migrate.py; read by the server through
+short-timeout read-only connections that raise BUSY while a refresh commits,
+so a route can degrade instead of stalling. Schema per the mission registry
+design, section 3.
+"""
+
+import json
+import sqlite3
+from pathlib import Path
+
+from viz.months import month_bounds
+
+BUSY = sqlite3.OperationalError
+ATTRIBUTE_COLUMNS = ("cloud", "daynight", "sensor", "orbit")
+_ROW_COLUMNS = ("id", "start", "end", "cloud", "daynight", "sensor", "orbit", "tile",
+                "minlon", "minlat", "maxlon", "maxlat", "ring", "browse", "data", "attrs")
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS granules (
+  mission TEXT NOT NULL,
+  id TEXT NOT NULL,
+  start TEXT NOT NULL,
+  end TEXT,
+  cloud REAL,
+  daynight TEXT,
+  sensor TEXT,
+  orbit INTEGER,
+  tile TEXT,
+  minlon REAL, minlat REAL, maxlon REAL, maxlat REAL,
+  ring TEXT,
+  browse TEXT,
+  data TEXT,
+  attrs TEXT,
+  PRIMARY KEY (mission, id)
+);
+CREATE INDEX IF NOT EXISTS granules_mission_start ON granules(mission, start);
+CREATE INDEX IF NOT EXISTS granules_mission_tile ON granules(mission, tile, start, cloud);
+CREATE INDEX IF NOT EXISTS granules_mission_lat ON granules(mission, minlat, maxlat, start);
+CREATE TABLE IF NOT EXISTS tiles (
+  grid TEXT NOT NULL,
+  tile TEXT NOT NULL,
+  ring TEXT NOT NULL,
+  PRIMARY KEY (grid, tile)
+);
+CREATE TABLE IF NOT EXISTS coverage (
+  mission TEXT NOT NULL,
+  id TEXT NOT NULL,
+  grid TEXT NOT NULL,
+  tile TEXT NOT NULL,
+  PRIMARY KEY (mission, id, grid, tile)
+);
+CREATE INDEX IF NOT EXISTS coverage_grid_tile ON coverage(grid, tile, mission);
+CREATE TABLE IF NOT EXISTS months (
+  mission TEXT NOT NULL,
+  month TEXT NOT NULL,
+  count INTEGER NOT NULL,
+  fetched_at TEXT NOT NULL,
+  PRIMARY KEY (mission, month)
+);
+"""
+
+
+def _values(mission, row):
+    out = [mission]
+    for column in _ROW_COLUMNS:
+        value = row.get(column)
+        if column in ("ring", "attrs") and value is not None:
+            value = json.dumps(value)
+        out.append(value)
+    return out
+
+
+class Catalog:
+    """One connection to a region's catalog; writable by default, read-only for the server."""
+
+    def __init__(self, path, read_only=False):
+        self.path = Path(path)
+        if read_only:
+            self.conn = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True, timeout=0.5)
+        else:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.conn = sqlite3.connect(str(self.path))
+            self.conn.executescript(SCHEMA)
+        self.conn.row_factory = sqlite3.Row
+
+    def close(self):
+        self.conn.close()
+
+    # --- writes ---
+
+    def replace_month(self, mission, month, rows, fetched_at):
+        """Replace one mission-month in a single transaction and record the fetch."""
+        start, end = month_bounds(month)
+        marks = ",".join("?" * (len(_ROW_COLUMNS) + 1))
+        with self.conn:
+            self.conn.execute("DELETE FROM granules WHERE mission = ? AND start >= ? AND start < ?",
+                              (mission, start, end))
+            self.conn.executemany(
+                f"INSERT OR REPLACE INTO granules (mission, {', '.join(_ROW_COLUMNS)}) VALUES ({marks})",
+                [_values(mission, r) for r in rows])
+            self.conn.execute(
+                "INSERT OR REPLACE INTO months (mission, month, count, fetched_at) VALUES (?, ?, ?, ?)",
+                (mission, month, len(rows), fetched_at))
+
+    def put_tiles(self, grid, pairs):
+        with self.conn:
+            self.conn.executemany("INSERT OR REPLACE INTO tiles (grid, tile, ring) VALUES (?, ?, ?)",
+                                  [(grid, tile, json.dumps(ring)) for tile, ring in pairs])
+
+    def put_coverage(self, rows):
+        with self.conn:
+            self.conn.executemany("INSERT OR IGNORE INTO coverage (mission, id, grid, tile) VALUES (?, ?, ?, ?)", rows)
+
+    # --- reads ---
+
+    def fetched_at(self, mission, month):
+        row = self.conn.execute("SELECT fetched_at FROM months WHERE mission = ? AND month = ?",
+                                (mission, month)).fetchone()
+        return row["fetched_at"] if row else None
+
+    def distinct_tiles(self, mission):
+        return [r["tile"] for r in self.conn.execute(
+            "SELECT DISTINCT tile FROM granules WHERE mission = ? AND tile IS NOT NULL ORDER BY tile", (mission,))]
+
+    def known_tiles(self, grid):
+        return {r["tile"] for r in self.conn.execute("SELECT tile FROM tiles WHERE grid = ?", (grid,))}
+
+    def tile_rings(self, grid):
+        return [(r["tile"], json.loads(r["ring"])) for r in self.conn.execute(
+            "SELECT tile, ring FROM tiles WHERE grid = ? ORDER BY tile", (grid,))]
+
+    def uncovered(self, mission, grid):
+        """(id, box, ring) of the mission's granules with no coverage row for the grid."""
+        sql = ("SELECT g.id, g.minlon, g.minlat, g.maxlon, g.maxlat, g.ring FROM granules g "
+               "WHERE g.mission = ? AND g.ring IS NOT NULL AND NOT EXISTS ("
+               "SELECT 1 FROM coverage c WHERE c.mission = g.mission AND c.id = g.id AND c.grid = ?) ORDER BY g.id")
+        return [(r["id"], (r["minlon"], r["minlat"], r["maxlon"], r["maxlat"]), json.loads(r["ring"]))
+                for r in self.conn.execute(sql, (mission, grid))]
+
+    def summary(self, mission):
+        row = self.conn.execute(
+            "SELECT COALESCE(SUM(count), 0) AS n, MAX(fetched_at) AS f, COUNT(*) AS m FROM months WHERE mission = ?",
+            (mission,)).fetchone()
+        return {"count": row["n"], "fetched": row["f"], "months": row["m"]}
+
+    def missions_present(self):
+        return [r["mission"] for r in self.conn.execute("SELECT DISTINCT mission FROM granules ORDER BY mission")]
+
+
+def open_read_only(path):
+    """A read-only Catalog; FileNotFoundError when the file is absent (never create one by accident)."""
+    path = Path(path)
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    return Catalog(path, read_only=True)
