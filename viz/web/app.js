@@ -27,11 +27,7 @@
     coincideAll: false,
     coincideOnly: false,
     eco: false,
-    ecoDay: "DAY",
-    hls: false,
-    hlsMode: "week",
-    hlsCloud: 30,
-    hlsSensor: "ALL"
+    ecoDay: "DAY"
   };
 
   // Hardcoded so the first paint fits CONUS before the boundary file loads.
@@ -65,31 +61,6 @@
   var ecoLayer = null;
   var ecoLoaded = false;
 
-  map.createPane("hls");
-  map.getPane("hls").style.zIndex = 451;   // above CPC, below ECOSTRESS and EMIT
-  var hlsRenderer = L.canvas({ pane: "hls" });
-  // Sequential purples, away from the CDL crop colours and both CPC ramps.
-  var HLS_CLASSES = [
-    { min: 1, max: 1, colour: "#e7d4e8", label: "1" },
-    { min: 2, max: 2, colour: "#c2a5cf", label: "2" },
-    { min: 3, max: 4, colour: "#9970ab", label: "3–4" },
-    { min: 5, max: 8, colour: "#762a83", label: "5–8" },
-    { min: 9, max: Infinity, colour: "#40004b", label: "9+" }
-  ];
-  var HLS_OUTLINE = "#40004b";
-  var hlsLayer = null;
-  var hlsLoaded = false;
-  var hlsCounts = {};
-  var hlsTimer = null;
-  var hlsRequest = 0;
-
-  function hlsColour(n) {
-    for (var i = 0; i < HLS_CLASSES.length; i++) {
-      if (n >= HLS_CLASSES[i].min && n <= HLS_CLASSES[i].max) { return HLS_CLASSES[i].colour; }
-    }
-    return null;
-  }
-
   function coincideSeconds() { return COINCIDE_STEPS[state.coincideStep] * 60; }
 
   // EMIT features carry the HLS acquisitions of their tile within ±HLS_PAIR_DAYS
@@ -105,8 +76,9 @@
     for (var i = 0; i < list.length; i++) {
       var h = list[i];
       if (Math.abs(h.dt) > days) { continue; }
-      if (h.cloud === null || h.cloud === undefined || h.cloud > state.hlsCloud) { continue; }
-      if (state.hlsSensor !== "ALL" && h.sensor !== state.hlsSensor) { continue; }
+      if (h.cloud === null || h.cloud === undefined || h.cloud > Missions.filter("hls", "cloud")) { continue; }
+      var sensor = Missions.filter("hls", "sensor");
+      if (sensor !== "ALL" && h.sensor !== sensor) { continue; }
       return true;
     }
     return false;
@@ -529,11 +501,11 @@
     return new Date(ms).toISOString().slice(0, 10);
   }
 
-  // The HLS counting range: the shared ±days window around the CPC week's Sunday,
+  // A tiled mission's counting range: the shared ±days window around the CPC week's Sunday,
   // or the crop's reporting season (Monday of its first CPC week to Sunday of its last).
-  function hlsRange() {
+  function tiledRange(key) {
     if (state.week === null || state.week === undefined) { return null; }
-    if (state.hlsMode === "season") {
+    if (Missions.mode(key) === "season") {
       var weeks = weeksFor(state.crop, state.var, state.year);
       if (!weeks.length) { return null; }
       var first = weekSunday(state.year, weeks[0]).getTime() - 6 * 86400000;
@@ -635,116 +607,21 @@
     el("ecoLegend").innerHTML = "<span>ECOSTRESS swath, bounding box (≈550 km), not the true outline</span>";
   }
 
-  function hlsStyleFor(counts) {
-    return function (feature) {
-      var n = counts[feature.properties.tile] || 0;
-      var colour = hlsColour(n);
-      return {
-        stroke: true, interactive: true,
-        color: HLS_OUTLINE, weight: 0.5, opacity: n ? 0.8 : 0.25,
-        fill: !!colour, fillColor: colour || "#ffffff", fillOpacity: colour ? 0.55 : 0
-      };
-    };
-  }
-
-  function applyHlsCounts() {
-    if (!hlsLayer) { return; }
-    hlsLayer.setStyle(hlsStyleFor(hlsCounts));
-    hlsLayer.eachLayer(function (layer) {
-      var tile = layer.feature.properties.tile;
-      layer.setTooltipContent(tile + ": " + (hlsCounts[tile] || 0) + " clear");
-    });
-    drawHlsLegend();
-  }
-
-  function fetchHlsCounts() {
-    var range = hlsRange();
-    if (!hlsLayer || !state.hls) { return; }
-    if (!range) {                      // no CPC weeks for this selection: nothing to count, clear stale colours
-      hlsRequest += 1;
-      hlsCounts = {};
-      applyHlsCounts();
-      return;
-    }
-    var seq = ++hlsRequest;
-    fetch("/api/hls/counts?start=" + range.start + "&end=" + range.end +
-          "&cloud=" + state.hlsCloud + "&sensor=" + state.hlsSensor)
-      .then(function (r) { return r.json(); })
-      .then(function (body) {
-        if (seq !== hlsRequest) { return; }   // a newer request has superseded this one
-        hlsCounts = body.counts || {};
-        applyHlsCounts();
-      })
-      .catch(function () { /* keep the last counts */ });
-  }
-
-  function refreshHlsCounts() {
-    clearTimeout(hlsTimer);
-    hlsTimer = setTimeout(fetchHlsCounts, 150);
-  }
-
-  function loadHls() {
-    if (hlsLoaded || !(state.catalog.hls_count > 0 && state.catalog.hls_tiles > 0)) { return; }
-    hlsLoaded = true;
-    fetch("/api/hls/tiles.geojson").then(function (r) { return r.json(); }).then(function (geo) {
-      hlsLayer = L.geoJSON(geo, {
-        pane: "hls", renderer: hlsRenderer, style: hlsStyleFor(hlsCounts),
-        onEachFeature: function (f, layer) {
-          layer.bindTooltip(f.properties.tile + ": 0 clear", { sticky: true, className: "emit-tip" });
-        }
-      });
-      syncHls();
-    }).catch(function () { hlsLoaded = false; });
-  }
-
-  function drawHlsLegend() {
-    var range = hlsRange();
-    if (!state.hls) {
-      el("hlsRange").textContent = "";
-      el("hlsLegend").innerHTML = "";
-      return;
-    }
-    el("hlsRange").textContent = range
-      ? (state.hlsMode === "season" ? "Season " : "Window ") + range.start + " to " + range.end
-      : "No CPC weeks for this selection";
-    el("hlsLegend").innerHTML =
-      '<span class="zero" style="--swatch:#fff">0</span>' +
-      HLS_CLASSES.map(function (c) {
-        return '<span style="--swatch:' + c.colour + '">' + c.label + "</span>";
-      }).join("") + "<span>clear acquisitions per MGRS tile</span>";
-  }
-
   function syncHls() {
-    // Rows without rings colour nothing, and a running fetch holds the store's
-    // write lock, so both leave the layer off with the reason on the label.
-    var busy = !!state.catalog.hls_busy;
-    var available = !busy && state.catalog.hls_count > 0 && state.catalog.hls_tiles > 0;
-    var box = el("hls");
-    box.disabled = !available;
-    box.parentNode.title = available ? ""
-      : busy ? "HLS store busy; a fetch is in progress. Reload when it finishes."
-      : state.catalog.hls_count > 0 ? "HLS tile rings not fetched yet; let ./run.sh hls finish."
-      : "No HLS store; run ./run.sh hls";
-    if (!available && state.hls) { state.hls = false; box.checked = false; }
-    // Cloud and Sensor also drive the ECOSTRESS + HLS mark, so they stay live
-    // while that mark is on; Mode only shapes the tile counts.
-    var active = available && (state.hls || state.coincideAll);
-    el("hlsControls").classList.toggle("disabled", !active);
-    el("hlsCloud").disabled = !active;
-    Array.prototype.forEach.call(document.getElementsByName("hlsSensor"), function (radio) {
-      radio.disabled = !active;
-    });
-    Array.prototype.forEach.call(document.getElementsByName("hlsMode"), function (radio) {
-      radio.disabled = !(available && state.hls);
-    });
-    if (!state.hls && hlsLayer && map.hasLayer(hlsLayer)) { map.removeLayer(hlsLayer); }
-    if (!state.hls) { drawHlsLegend(); }
-    if (state.hls) {
-      if (!hlsLayer) { loadHls(); return; }
-      if (!map.hasLayer(hlsLayer)) { hlsLayer.addTo(map); }
-      drawHlsLegend();
-      refreshHlsCounts();
-    }
+    // Availability comes from the catalog: rows without rings colour nothing, and a running
+    // refresh holds the write lock, so both leave the layer off with the reason on the label.
+    var spec = (state.catalog.missions || []).filter(function (m) { return m.key === "hls"; })[0];
+    if (!spec) { return; }
+    var busy = !!state.catalog.catalog_busy;
+    var available = !busy && spec.count > 0 && spec.tiles > 0;
+    Missions.setAvailable("hls", available,
+      busy ? "Catalog busy; a refresh is in progress. Reload when it finishes."
+      : spec.count > 0 ? "HLS tile outlines not computed yet; let ./run.sh refresh hls finish."
+      : "No HLS rows in the catalog; run ./run.sh refresh hls");
+    // Cloud and Sensor also drive the ECOSTRESS + HLS mark, so they stay live while that mark is on.
+    var active = available && (Missions.isOn("hls") || state.coincideAll);
+    Missions.setControlsActive("hls", active, available && Missions.isOn("hls"));
+    Missions.sync("hls");
   }
 
   function syncEco() {
@@ -1089,7 +966,7 @@
                (g.hls
                  ? ' <span class="tag">HLS ' + g.hls.sensor + " " + formatDays(g.hls.dt) + ", " +
                    (g.hls.cloud === null ? "?" : g.hls.cloud.toFixed(0)) + "% cloud</span>"
-                 : (g.hls === null ? ' <span class="tag">no clear HLS within ±' + report.hls.window + " d</span>" : "")) +
+                 : (g.hls === null ? ' <span class="tag">no clear HLS within ±' + report.missions.hls.window + " d</span>" : "")) +
                (inWin ? " <span>★</span>" : "") + "</li>";
       });
     }
@@ -1109,7 +986,7 @@
       });
     }
     html += foldable("eco", "ECOSTRESS swaths covering this point: " + swaths.length, ecoBody);
-    var hlsBlock = report.hls;
+    var hlsBlock = report.missions && report.missions.hls;
     if (hlsBlock) {
       var totalAcq = 0, totalClear = 0;
       hlsBlock.tiles.forEach(function (t) { totalAcq += t.acq.length; totalClear += t.clear; });
@@ -1268,7 +1145,7 @@
       syncEmit();
       syncEco();
       // Season mode ignores the window, so only week mode refetches the counts.
-      if (state.hls && state.hlsMode === "week") { drawHlsLegend(); refreshHlsCounts(); }
+      if (Missions.isOn("hls") && Missions.mode("hls") === "week") { Missions.drawLegend("hls"); Missions.refreshCounts("hls"); }
     });
     el("coincide").addEventListener("change", function (e) { state.coincide = e.target.checked; syncEmit(); });
     el("coincideAll").addEventListener("change", function (e) { state.coincideAll = e.target.checked; syncEmit(); syncHls(); });
@@ -1281,24 +1158,6 @@
     el("eco").addEventListener("change", function (e) { state.eco = e.target.checked; syncEco(); });
     Array.prototype.forEach.call(document.getElementsByName("ecoDay"), function (radio) {
       radio.addEventListener("change", function (e) { if (e.target.checked) { state.ecoDay = e.target.value; syncEco(); } });
-    });
-    el("hls").addEventListener("change", function (e) { state.hls = e.target.checked; syncHls(); });
-    el("hlsCloud").addEventListener("input", function (e) {
-      state.hlsCloud = Number(e.target.value);
-      el("hlsCloudOut").textContent = e.target.value + "%";
-      refreshHlsCounts();
-      if (state.coincideAll) { syncEmit(); }
-    });
-    ["hlsMode", "hlsSensor"].forEach(function (name) {
-      Array.prototype.forEach.call(document.getElementsByName(name), function (radio) {
-        radio.addEventListener("change", function (e) {
-          if (!e.target.checked) { return; }
-          state[name] = e.target.value;
-          drawHlsLegend();
-          refreshHlsCounts();
-          if (state.coincideAll) { syncEmit(); }
-        });
-      });
     });
     Array.prototype.forEach.call(document.getElementsByName("mode"), function (radio) {
       radio.addEventListener("change", function (e) {
@@ -1319,13 +1178,15 @@
         .setLatLng(e.latlng)
         .setContent('<p class="note">Reading…</p>')
         .openOn(map);
-      var range = hlsRange();
+      var range = tiledRange("hls");
+      var cloudFilter = Missions.filter("hls", "cloud");   // undefined when the registry has no hls: server defaults
       var url = "/api/point?lon=" + e.latlng.lng.toFixed(6) +
                 "&lat=" + e.latlng.lat.toFixed(6) +
                 "&crop=" + state.crop + "&year=" + state.year + "&cdl_year=" + state.cdlYear +
                 (state.week !== null ? "&week=" + state.week : "") +
                 (range ? "&start=" + range.start + "&end=" + range.end : "") +
-                "&cloud=" + state.hlsCloud + "&sensor=" + state.hlsSensor + "&window=" + state.days;
+                (cloudFilter !== undefined ? "&cloud=" + cloudFilter + "&sensor=" + Missions.filter("hls", "sensor") : "") +
+                "&window=" + state.days;
       var popup = readoutPopup;
       fetch(url).then(function (r) { return r.json(); })
         .then(function (report) {
@@ -1342,7 +1203,7 @@
     var tags = {
       cpc: on("cpc") ? [] : ["layer off"],
       cdl: (on("cdl") ? [] : ["layer off"]).concat(on("mask") && !el("mask").disabled ? ["masked"] : []),
-      imagery: [["emit", "EMIT"], ["eco", "ECOSTRESS"], ["hls", "HLS"]]
+      imagery: [["emit", "EMIT"], ["eco", "ECOSTRESS"], ["mission-hls", "HLS"]]
         .filter(function (p) { return on(p[0]); }).map(function (p) { return p[1]; }),
       reference: [["states", "states"], ["basins2", "basins"], ["basins4", "subbasins"], ["rivers", "rivers"]]
         .filter(function (p) { return on(p[0]); }).map(function (p) { return p[1]; })
@@ -1374,6 +1235,11 @@
 
   fetch("/api/catalog").then(function (r) { return r.json(); }).then(function (catalog) {
     state.catalog = catalog;
+    Missions.init(map, catalog, {
+      range: tiledRange,
+      onToggle: function () { syncHls(); },
+      onFilterChange: function () { if (state.coincideAll) { syncEmit(); } }
+    });
     fillSelect(el("crop"), catalog.crops, state.crop);
     fillSelect(el("var"), catalog.vars, state.var, function (v) { return catalog.var_labels[v]; });
     syncYearSelect();
@@ -1381,7 +1247,7 @@
     wire();
     refresh();
     loadStates();
-    drawEmitLegend(); drawEcoLegend(); drawHlsLegend(); syncEmit(); syncEco(); syncHls();
+    drawEmitLegend(); drawEcoLegend(); syncEmit(); syncEco(); syncHls();
     wireGroups();
   }).catch(function () {
     el("pairing").textContent = "Catalog request failed; is the server running? Reload to retry.";

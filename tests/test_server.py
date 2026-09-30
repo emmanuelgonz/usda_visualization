@@ -821,8 +821,14 @@ class TestInterfaceAssets(ServerTestCase):
         html = index.decode()
         panel = html[html.index('<aside id="panel">'):html.index("</aside>")]
         tags = re.findall(r"<(?:input|select)\b[^>]*>", panel)
-        self.assertGreater(len(tags), 30)
+        self.assertGreater(len(tags), 25)
         for tag in tags:
+            self.assertIn('autocomplete="off"', tag)
+        # The generated mission blocks carry the same attribute on every input they build.
+        _, _, missions = self.get("/static/missions.js")
+        generated = re.findall(r"<input\b[^>]*", missions.decode())
+        self.assertGreater(len(generated), 3)
+        for tag in generated:
             self.assertIn('autocomplete="off"', tag)
 
     def test_river_layers(self):
@@ -888,14 +894,14 @@ class TestInterfaceAssets(ServerTestCase):
         match = re.search(r"function hlsPaired\(p\) \{.*?\n  \}", text, re.S)
         self.assertIsNotNone(match, "hlsPaired function not found in app.js")
         script = (
-            'var HLS_PAIR_DAYS = 15; var state = { days: 7, hlsCloud: 30, hlsSensor: "ALL" };\n' + match.group(0) +
+            'var HLS_PAIR_DAYS = 15; var state = { days: 7 }; var Missions = { filter: function (k, a) { return a === "cloud" ? 30 : "ALL"; } };\n' + match.group(0) +
             '\nvar near = { hls_near: [{ date: "x", sensor: "S30", cloud: 10, dt: -2 }] };\n'
             'var farOnly = { hls_near: [{ date: "x", sensor: "S30", cloud: 0, dt: 20 }] };\n'
             'var cloudy = { hls_near: [{ date: "x", sensor: "S30", cloud: 80, dt: 1 }, { date: "x", sensor: "L30", cloud: null, dt: 1 }] };\n'
             'var out = [hlsPaired(near), hlsPaired(farOnly), hlsPaired(cloudy), hlsPaired({})];\n'
             'state.days = 30; out.push(hlsPaired(farOnly));\n'
-            'state.hlsSensor = "L30"; out.push(hlsPaired(near));\n'
-            'state.hlsSensor = "ALL"; state.days = 0; out.push(hlsPaired(near));\n'
+            'Missions.filter = function (k, a) { return a === "cloud" ? 30 : "L30"; }; out.push(hlsPaired(near));\n'
+            'Missions.filter = function (k, a) { return a === "cloud" ? 30 : "ALL"; }; state.days = 0; out.push(hlsPaired(near));\n'
             'console.log(out.join("|"));'
         )
         result = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=10)
@@ -988,7 +994,7 @@ class TestInterfaceAssets(ServerTestCase):
             self.assertTrue(cpc < html.index(ident) < cdl, ident)
         for ident in ('id="cdlOpacity"', 'id="mask"'):
             self.assertTrue(cdl < html.index(ident) < imagery, ident)
-        for ident in ('id="timeWindow"', 'id="emit"', 'id="eco"', 'id="hls"'):
+        for ident in ('id="timeWindow"', 'id="emit"', 'id="eco"', 'id="missionControls"'):
             self.assertTrue(imagery < html.index(ident) < reference, ident)
         for ident in ('id="states"', 'id="rivers"'):
             self.assertGreater(html.index(ident), reference)
@@ -996,6 +1002,7 @@ class TestInterfaceAssets(ServerTestCase):
         text = app.decode()
         self.assertIn("sidebarOpen", text)
         self.assertIn("updateGroupTags", text)
+        self.assertIn('["mission-hls", "HLS"]', text)
         _, _, css = self.get("/static/style.css")
         self.assertIn("details.group[open] > summary .on", css.decode())
 
@@ -1148,22 +1155,33 @@ class TestInterfaceAssets(ServerTestCase):
         self.assertNotIn("emitWindowBounds", text)
         self.assertIn("state.days", text)
 
-    def test_hls_layer_controls_and_routes(self):
+    def test_tiled_controls_are_generated(self):
         _, _, index = self.get("/")
         html = index.decode()
-        for ident in ('id="hls"', 'name="hlsMode"', 'id="hlsRange"', 'id="hlsCloud"',
-                      'name="hlsSensor"', 'id="hlsLegend"'):
-            self.assertIn(ident, html)
-        _, _, app = self.get("/static/app.js")
-        text = app.decode()
-        self.assertIn("/api/hls/tiles.geojson", text)
-        self.assertIn("/api/hls/counts?", text)
-        self.assertIn("HLS_CLASSES", text)
+        self.assertIn('id="missionControls"', html)
+        self.assertIn('src="/static/missions.js"', html)
+        self.assertLess(html.index('src="/static/missions.js"'), html.index('src="/static/app.js"'))
+        for old in ('id="hls"', 'name="hlsMode"', 'id="hlsCloud"', 'name="hlsSensor"', 'id="hlsLegend"'):
+            self.assertNotIn(old, html)
+        _, _, missions = self.get("/static/missions.js")
+        text = missions.decode()
+        for needle in ('"mission-" + key', "-f-", "-mode", "-range", "-legend", "/api/missions/", "/tiles.geojson",
+                       "/counts?start=", "f." , "TILED_CLASSES", "clear acquisitions per MGRS tile", "Missions.init"):
+            self.assertIn(needle, text)
         for colour in ("#e7d4e8", "#c2a5cf", "#9970ab", "#762a83", "#40004b"):
             self.assertIn(colour, text)
-        self.assertIn('map.createPane("hls")', text)
-        self.assertIn("451", text[text.index('map.getPane("hls")'):text.index('map.getPane("hls")') + 80])
-        self.assertIn("setTimeout(fetchHlsCounts, 150)", text)
+        self.assertIn('map.createPane("mission-" + key)', text)
+        self.assertIn("(spec.style && spec.style.pane) || 451", text)
+        self.assertIn("COUNTS_DEBOUNCE_MS = 150", text)
+        _, _, css = self.get("/static/style.css")
+        self.assertIn("#missionControls { display: contents; }", css.decode())
+        self.assertIn("no CPC weeks for this selection: nothing to count", text)
+        _, _, app = self.get("/static/app.js")
+        app_text = app.decode()
+        self.assertNotIn("/api/hls/", app_text)
+        self.assertNotIn("hlsCloud", app_text)
+        self.assertIn('Missions.filter("hls", "cloud")', app_text)
+        self.assertIn("report.missions", app_text)
 
     def test_hls_range_resolves_week_window_and_season(self):
         _, _, app = self.get("/static/app.js")
@@ -1171,16 +1189,17 @@ class TestInterfaceAssets(ServerTestCase):
         if not shutil.which("node"):
             self.skipTest("node not available")
         parts = []
-        for name in ("weekSunday(year, week)", "isoDate(ms)", "hlsRange()"):
+        for name in ("weekSunday(year, week)", "isoDate(ms)", "tiledRange(key)"):
             match = re.search(r"function " + re.escape(name) + r" \{.*?\n  \}", text, re.S)
             self.assertIsNotNone(match, name + " not found in app.js")
             parts.append(match.group(0))
         script = (
-            'var state = { week: 30, year: 2025, days: 7, hlsMode: "week", crop: "corn", var: "cond" };\n'
+            'var state = { week: 30, year: 2025, days: 7, crop: "corn", var: "cond" };\n'
+            'var Missions = { mode: function () { return mode; } }; var mode = "week";\n'
             "function weeksFor() { return [14, 30, 44]; }\n" + "\n".join(parts) + "\n"
-            "var a = hlsRange(); state.hlsMode = \"season\"; var b = hlsRange();\n"
-            "state.days = 0; state.hlsMode = \"week\"; var c = hlsRange();\n"
-            "state.week = null; var d = hlsRange();\n"
+            "var a = tiledRange(\"hls\"); mode = \"season\"; var b = tiledRange(\"hls\");\n"
+            "state.days = 0; mode = \"week\"; var c = tiledRange(\"hls\");\n"
+            "state.week = null; var d = tiledRange(\"hls\");\n"
             "console.log([a.start, a.end, b.start, b.end, c.start, c.end, String(d)].join(\"|\"));"
         )
         result = subprocess.run(["node", "-e", script], capture_output=True, text=True, timeout=10)
@@ -1194,15 +1213,17 @@ class TestInterfaceAssets(ServerTestCase):
         boot = text[text.index('fetch("/api/catalog")'):]
         self.assertIn(".catch(", boot)
         self.assertIn("Catalog request failed; is the server running? Reload to retry.", boot)
-        self.assertIn("hls_busy", text)
+        self.assertIn("catalog_busy", text)
+        self.assertNotIn("hls_busy", text)
 
     def test_hls_layer_is_gated_on_tile_rings_as_well_as_rows(self):
         _, _, app = self.get("/static/app.js")
         text = app.decode()
-        body = text[text.index("function loadHls"):text.index("function syncEco")]
-        self.assertIn("hls_tiles", body)
-        self.assertIn("HLS tile rings not fetched yet; let ./run.sh hls finish.", body)
-        self.assertIn("HLS store busy; a fetch is in progress. Reload when it finishes.", body)
+        body = text[text.index("function syncHls"):text.index("function syncEco")]
+        self.assertIn("spec.count > 0 && spec.tiles > 0", body)
+        self.assertIn("HLS tile outlines not computed yet; let ./run.sh refresh hls finish.", body)
+        self.assertIn("Catalog busy; a refresh is in progress. Reload when it finishes.", body)
+        self.assertNotIn("hls_tiles", text)
         self.assertIn("g.hls === null", text)
         self.assertIn("no week selected", text)
 
@@ -1254,8 +1275,7 @@ class TestInterfaceAssets(ServerTestCase):
         self.assertNotIn("eco-tag", text)
         self.assertIn('class="tag"', text)
         self.assertIn("g.hls.cloud.toFixed(0)", text)
-        self.assertIn('state.hls && state.hlsMode === "week"', text)
-        self.assertIn("no CPC weeks for this selection: nothing to count", text)
+        self.assertIn('Missions.isOn("hls") && Missions.mode("hls") === "week"', text)
         _, _, css = self.get("/static/style.css")
         self.assertIn(".emit-list .tag", css.decode())
         self.assertNotIn("eco-tag", css.decode())
