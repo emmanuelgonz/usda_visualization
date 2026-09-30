@@ -17,10 +17,10 @@ import threading
 from pathlib import Path
 
 from viz.emit import point_in_ring
+from viz.months import FROZEN_AFTER_DAYS, is_frozen, month_bounds, months_between  # noqa: F401  (re-exported)
 
 SENSORS = ("L30", "S30")
 FIRST_MONTH = "2022-01"
-FROZEN_AFTER_DAYS = 60
 
 # Raised by a read when a fetch holds the write lock, so the server can degrade
 # an HLS response without importing sqlite3 itself.
@@ -96,42 +96,6 @@ def parse_ur(granule_ur):
     match = _UR_RE.match(granule_ur or "")
     return (match.group(1), match.group(2)) if match else None
 
-
-def _split_month(month):
-    """(year, month) from 'YYYY-MM'."""
-    year, mon = month.split("-")
-    return int(year), int(mon)
-
-
-def months_between(first, last):
-    """Every 'YYYY-MM' from first to last inclusive."""
-    year, month = _split_month(first)
-    last_year, last_month = _split_month(last)
-    out = []
-    while (year, month) <= (last_year, last_month):
-        out.append(f"{year:04d}-{month:02d}")
-        month += 1
-        if month == 13:
-            year, month = year + 1, 1
-    return out
-
-
-def month_bounds(month):
-    """(first day of the month, first day of the next month) as ISO dates."""
-    year, mon = _split_month(month)
-    start = datetime.date(year, mon, 1)
-    end = datetime.date(year + 1, 1, 1) if mon == 12 else datetime.date(year, mon + 1, 1)
-    return start.isoformat(), end.isoformat()
-
-
-def is_frozen(month, fetched_at, days=FROZEN_AFTER_DAYS):
-    """True when the month was fetched at least `days` after it ended."""
-    _, end = month_bounds(month)
-    end_date = datetime.date.fromisoformat(end)
-    stamp = datetime.datetime.fromisoformat(fetched_at.replace("Z", "+00:00"))
-    if stamp.tzinfo is not None:
-        stamp = stamp.astimezone(datetime.timezone.utc)      # compare calendar days in UTC
-    return (stamp.date() - end_date).days >= days
 
 
 def parse_csv(text):
