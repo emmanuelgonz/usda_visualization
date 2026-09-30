@@ -27,3 +27,11 @@ BASINS2 = WEB / "vendor" / "basins2.geojson"
 BASINS4 = WEB / "vendor" / "basins4.geojson"
 RIVERS6 = WEB / "vendor" / "rivers6.geojson"          # HydroRIVERS, Strahler order 6 and above
 RIVERS4 = WEB / "vendor" / "rivers4.geojson"          # HydroRIVERS, orders 4 and 5
+
+MISSIONS = ROOT / "viz" / "missions.json"      # the mission registry
+CATALOG_DATA = DATA / "catalog"                 # one SQLite catalog per region
+
+
+def catalog_db(region_name):
+    """The catalog for a region, by its lower-cased name."""
+    return CATALOG_DATA / f"{region_name.lower()}.sqlite"

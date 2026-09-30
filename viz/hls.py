@@ -17,10 +17,10 @@ import threading
 from pathlib import Path
 
 from viz.emit import point_in_ring
+from viz.months import FROZEN_AFTER_DAYS, is_frozen, month_bounds, months_between  # noqa: F401  (re-exported)
 
 SENSORS = ("L30", "S30")
 FIRST_MONTH = "2022-01"
-FROZEN_AFTER_DAYS = 60
 
 # Raised by a read when a fetch holds the write lock, so the server can degrade
 # an HLS response without importing sqlite3 itself.
@@ -29,66 +29,7 @@ BUSY = sqlite3.OperationalError
 _UR_RE = re.compile(r"^HLS\.(L30|S30)\.(T[0-9]{2}[A-Z]{3})\.")
 
 
-# MGRS tile ID: T, UTM zone, latitude band, 100 km column letter, 100 km row letter.
-_TILE_ID_RE = re.compile(r"^T(\d{2})([C-HJ-NP-X])([A-HJ-NP-Z])([A-HJ-NP-V])$")
-_BANDS = "CDEFGHJKLMNPQRSTUVWX"                   # 8-degree bands from 80 S
-_COLUMN_SETS = ("ABCDEFGH", "JKLMNPQR", "STUVWXYZ")
-_ROW_LETTERS = "ABCDEFGHJKLMNPQRSTUV"
-TILE_SIDE_M = 109800.0                             # Sentinel-2 / HLS tile side
-_transforms = {}
-
-
-def _transforms_for(zone):
-    """(UTM -> WGS84, WGS84 -> UTM) for a northern-hemisphere zone, built once."""
-    if zone not in _transforms:
-        from osgeo import osr
-        osr.UseExceptions()
-        utm = osr.SpatialReference()
-        utm.ImportFromEPSG(32600 + zone)
-        wgs = osr.SpatialReference()
-        wgs.ImportFromEPSG(4326)
-        for srs in (utm, wgs):
-            srs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
-        _transforms[zone] = (osr.CoordinateTransformation(utm, wgs), osr.CoordinateTransformation(wgs, utm))
-    return _transforms[zone]
-
-
-def tile_ring(tile):
-    """The closed [lon, lat] outline of an MGRS/HLS tile computed from its ID, or None if malformed.
-
-    A granule's CMR polygon is its data footprint, which at a swath edge is a
-    clipped piece of the tile, so the outline is computed instead: the 100 km
-    square's easting comes from the column letter, its northing from the row
-    letter (offset by five rows in even zones) resolved to the latitude band,
-    and the 109.8 km Sentinel-2 tile hangs from the square's north-west corner.
-    Northern hemisphere only, which covers every HLS tile over CONUS.
-    """
-    match = _TILE_ID_RE.match(tile or "")
-    if not match:
-        return None
-    zone = int(match.group(1))
-    band, column, row = match.group(2), match.group(3), match.group(4)
-    if not (1 <= zone <= 60) or band < "N":
-        return None
-    columns = _COLUMN_SETS[(zone - 1) % 3]
-    if column not in columns:
-        return None
-    to_wgs, to_utm = _transforms_for(zone)
-    easting = (columns.index(column) + 1) * 100000.0
-    row_index = (_ROW_LETTERS.index(row) - (0 if zone % 2 else 5)) % 20
-    northing = row_index * 100000.0
-    band_min_lat = -80 + 8 * _BANDS.index(band)
-    band_min_northing = to_utm.TransformPoint(-183.0 + 6 * zone, float(band_min_lat))[1]
-    while northing < band_min_northing - 100000.0:   # a square may start just south of its band
-        northing += 2000000.0
-    band_max_northing = to_utm.TransformPoint(-183.0 + 6 * zone, float(band_min_lat + 8))[1]
-    if northing > band_max_northing:                  # row letter inconsistent with the band
-        return None
-    top = northing + 100000.0
-    corners = [(easting, top - TILE_SIDE_M), (easting + TILE_SIDE_M, top - TILE_SIDE_M),
-               (easting + TILE_SIDE_M, top), (easting, top)]
-    ring = [[round(x, 6), round(y, 6)] for x, y, _ in (to_wgs.TransformPoint(e, n) for e, n in corners)]
-    return ring + [ring[0]]
+from viz.grids.mgrs import TILE_SIDE_M, ring as tile_ring, _transforms_for  # noqa: F401  (re-exported)
 
 
 def parse_ur(granule_ur):
@@ -96,42 +37,6 @@ def parse_ur(granule_ur):
     match = _UR_RE.match(granule_ur or "")
     return (match.group(1), match.group(2)) if match else None
 
-
-def _split_month(month):
-    """(year, month) from 'YYYY-MM'."""
-    year, mon = month.split("-")
-    return int(year), int(mon)
-
-
-def months_between(first, last):
-    """Every 'YYYY-MM' from first to last inclusive."""
-    year, month = _split_month(first)
-    last_year, last_month = _split_month(last)
-    out = []
-    while (year, month) <= (last_year, last_month):
-        out.append(f"{year:04d}-{month:02d}")
-        month += 1
-        if month == 13:
-            year, month = year + 1, 1
-    return out
-
-
-def month_bounds(month):
-    """(first day of the month, first day of the next month) as ISO dates."""
-    year, mon = _split_month(month)
-    start = datetime.date(year, mon, 1)
-    end = datetime.date(year + 1, 1, 1) if mon == 12 else datetime.date(year, mon + 1, 1)
-    return start.isoformat(), end.isoformat()
-
-
-def is_frozen(month, fetched_at, days=FROZEN_AFTER_DAYS):
-    """True when the month was fetched at least `days` after it ended."""
-    _, end = month_bounds(month)
-    end_date = datetime.date.fromisoformat(end)
-    stamp = datetime.datetime.fromisoformat(fetched_at.replace("Z", "+00:00"))
-    if stamp.tzinfo is not None:
-        stamp = stamp.astimezone(datetime.timezone.utc)      # compare calendar days in UTC
-    return (stamp.date() - end_date).days >= days
 
 
 def parse_csv(text):

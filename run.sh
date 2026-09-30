@@ -82,6 +82,19 @@ case "${1:-}" in
       echo "note: no EMIT footprints yet; run ./run.sh footprints to pair them with HLS" >&2
     fi
     ;;
+  refresh)
+    # Refreshes the region catalog (data/catalog/<region>.sqlite) from CMR for
+    # every mission in viz/missions.json, or the named ones; frozen months are
+    # skipped, then tile outlines and swath coverage are computed. Network access.
+    shift
+    exec python3 -m viz.refresh "$@"
+    ;;
+  migrate)
+    # One-time import of data/hls/hls.sqlite and the EMIT and ECOSTRESS footprint
+    # files into the region catalog, so nothing is fetched again. Safe to rerun.
+    shift
+    exec python3 -m viz.migrate "$@"
+    ;;
   serve)
     shift
     if [ ! -f viz/web/vendor/leaflet/leaflet.js ] || [ ! -f viz/web/vendor/states.geojson ]; then
@@ -103,10 +116,13 @@ case "${1:-}" in
     if [ ! -f data/hls/hls.sqlite ]; then
       echo "note: no HLS store (data/hls/hls.sqlite); the HLS layer is off until ./run.sh hls is run" >&2
     fi
+    if [ ! -f data/catalog/conus.sqlite ]; then
+      echo "note: no region catalog (data/catalog/conus.sqlite); run ./run.sh migrate once, then ./run.sh refresh" >&2
+    fi
     exec python3 -m viz.tileserver "$@"
     ;;
   # -t . keeps the repo root as the top-level import dir so `from viz import ...`
   # and `from tests import fixtures` both resolve.
   test)    shift; exec python3 -m unittest discover -s tests -t . -v "$@" ;;
-  *) echo "usage: $0 {extract|prepare|vendor|footprints|emit|hls|serve|test} [args]" >&2; exit 2 ;;
+  *) echo "usage: $0 {extract|prepare|vendor|footprints|emit|hls|refresh|migrate|serve|test} [args]" >&2; exit 2 ;;
 esac
