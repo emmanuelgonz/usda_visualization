@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "region": {"name": "CONUS", "bbox": [-125.0, 24.4, -66.9, 49.4]},
+  "missions": [
+    {
+      "key": "emit", "name": "EMIT", "label": "EMIT footprints",
+      "archetype": "swath", "footprint": "polygon",
+      "cmr": [{"short_name": "EMITL2ARFL", "version": "001"}],
+      "since": "2022-08",
+      "attributes": {"cloud": {"from": "cloud_cover", "type": "number"}},
+      "filters": [{"attribute": "cloud", "control": "max", "default": 30, "label": "Max cloud cover"}],
+      "browse": {"source": "links", "match": "\\.png$"},
+      "links": {"data": {"rel": "data#", "match": "\\.nc$"}},
+      "style": {"colour_by": "year", "pane": 455}
+    },
+    {
+      "key": "eco", "name": "ECOSTRESS", "label": "ECOSTRESS swaths",
+      "archetype": "swath", "footprint": "box",
+      "cmr": [{"short_name": "ECO_L2_LSTE", "version": "002"}],
+      "since": "2022-01",
+      "attributes": {"daynight": {"from": "day_night_flag", "type": "text"},
+                     "orbit": {"from": "orbit", "type": "int"}},
+      "filters": [{"attribute": "daynight", "control": "choice", "values": ["DAY", "NIGHT", "ALL"], "default": "DAY", "label": "Time of day"}],
+      "browse": {"source": "sibling", "short_name": "ECO_L2T_LSTE", "version": "002",
+                 "id_pattern": "^ECOv002_L2_LSTE_(\\d+)_(\\d+)_",
+                 "sibling_pattern": "ECOv002_L2T_LSTE_{0}_{1}_*",
+                 "kinds": {"lst": "_LST.jpeg", "qc": "_QC.jpeg", "cloud": "_cloud.jpeg"}},
+      "links": {},
+      "style": {"colour": "#5b6770", "pane": 452}
+    },
+    {
+      "key": "hls", "name": "HLS", "label": "HLS coverage",
+      "archetype": "tiled", "grid": "mgrs",
+      "cmr": [{"short_name": "HLSL30", "version": "2.0", "implies": {"sensor": "L30"}},
+              {"short_name": "HLSS30", "version": "2.0", "implies": {"sensor": "S30"}}],
+      "since": "2022-01",
+      "tile_from": {"field": "title", "pattern": "^HLS\\.[LS]30\\.(T[0-9]{2}[A-Z]{3})\\."},
+      "attributes": {"cloud": {"from": "cloud_cover", "type": "number"},
+                     "sensor": {"from": "sensor", "type": "text"}},
+      "filters": [{"attribute": "cloud", "control": "max", "default": 30, "label": "Max cloud"},
+                  {"attribute": "sensor", "control": "choice", "values": ["ALL", "L30", "S30"], "default": "ALL", "label": "Sensor"}],
+      "browse": {"source": "links", "match": "\\.jpg$"},
+      "links": {},
+      "style": {"pane": 451}
+    }
+  ]
+}
