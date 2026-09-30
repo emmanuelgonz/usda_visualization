@@ -1,11 +1,10 @@
 import unittest
 
-from viz import grids, hls
+from viz import grids
 
 
 class TestGrids(unittest.TestCase):
-    def test_mgrs_ring_is_the_hls_tile_ring(self):
-        self.assertIs(grids.get("mgrs").ring, hls.tile_ring)
+    def test_mgrs_ring_is_a_closed_five_vertex_ring(self):
         self.assertEqual(grids.NAMES, ("mgrs",))
         ring = grids.mgrs.ring("T15TVH")
         self.assertEqual(len(ring), 5)

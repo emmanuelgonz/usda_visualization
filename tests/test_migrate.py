@@ -2,15 +2,46 @@ import io
 import json
 import os
 import shutil
+import sqlite3
 import tempfile
 import unittest
 import unittest.mock
 from pathlib import Path
 
-from viz import catalog, hls, migrate, paths, registry
+from viz import catalog, grids, migrate, paths, registry
 
 NOW = lambda: "2025-09-30T00:00:00+00:00"
 RING_IA = [[-94, 41.5], [-93, 41.5], [-93, 42.5], [-94, 42.5], [-94, 41.5]]
+
+
+OLD_SCHEMA = """
+CREATE TABLE IF NOT EXISTS acq (id TEXT PRIMARY KEY, tile TEXT NOT NULL, date TEXT NOT NULL, time TEXT NOT NULL, sensor TEXT NOT NULL, cloud INTEGER);
+CREATE TABLE IF NOT EXISTS tiles (tile TEXT PRIMARY KEY, ring TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS months (sensor TEXT NOT NULL, month TEXT NOT NULL, count INTEGER NOT NULL, fetched_at TEXT NOT NULL, PRIMARY KEY (sensor, month));
+"""
+
+
+class OldStore:
+    """The retired HLS store's on-disk schema, written directly so the migrate tests can build a fixture."""
+
+    def __init__(self, path):
+        self.conn = sqlite3.connect(str(path))
+        self.conn.executescript(OLD_SCHEMA)
+
+    def replace_month(self, sensor, month, rows, fetched_at):
+        with self.conn:
+            self.conn.executemany("INSERT OR REPLACE INTO acq (id, tile, date, time, sensor, cloud) VALUES (?, ?, ?, ?, ?, ?)",
+                                  [(r["id"], r["tile"], r["date"], r["time"], r["sensor"], r["cloud"]) for r in rows])
+            self.conn.execute("INSERT OR REPLACE INTO months (sensor, month, count, fetched_at) VALUES (?, ?, ?, ?)",
+                              (sensor, month, len(rows), fetched_at))
+
+    def put_tiles(self, pairs):
+        with self.conn:
+            self.conn.executemany("INSERT OR REPLACE INTO tiles (tile, ring) VALUES (?, ?)",
+                                  [(tile, json.dumps(ring)) for tile, ring in pairs])
+
+    def close(self):
+        self.conn.close()
 
 
 def write_geojson(path, features):
@@ -22,7 +53,7 @@ class TestMigrate(unittest.TestCase):
         self.tmp = Path(tempfile.mkdtemp())
         self.cat = catalog.Catalog(self.tmp / "c.sqlite")
         self.out = io.StringIO()
-        store = hls.Store(self.tmp / "hls.sqlite")
+        store = OldStore(self.tmp / "hls.sqlite")
         store.replace_month("S30", "2025-07", [
             {"id": "HLS.S30.T15TVH.2025199T170000.v2.0", "tile": "T15TVH", "date": "2025-07-18", "time": "2025-07-18T17:00:00Z", "sensor": "S30", "cloud": 10},
             {"id": "HLS.S30.T15TVH.2025200T170000.v2.0", "tile": "T15TVH", "date": "2025-07-19", "time": "2025-07-19T17:00:00Z", "sensor": "S30", "cloud": None},
@@ -30,7 +61,7 @@ class TestMigrate(unittest.TestCase):
         store.replace_month("L30", "2025-07", [
             {"id": "HLS.L30.T15TVH.2025198T170000.v2.0", "tile": "T15TVH", "date": "2025-07-17", "time": "2025-07-17T17:00:00Z", "sensor": "L30", "cloud": 50},
         ], "2025-08-02T00:00:00+00:00")
-        store.put_tiles([("T15TVH", hls.tile_ring("T15TVH"))])
+        store.put_tiles([("T15TVH", grids.mgrs.ring("T15TVH"))])
         store.close()
         write_geojson(self.tmp / "emit.geojson", [{
             "type": "Feature", "geometry": {"type": "Polygon", "coordinates": [RING_IA]},
@@ -58,7 +89,7 @@ class TestMigrate(unittest.TestCase):
         self.assertEqual(self.cat.known_tiles("mgrs"), {"T15TVH"})
 
     def test_import_hls_stamps_a_month_missing_a_sensor_with_its_end_date(self):
-        store = hls.Store(self.tmp / "hls.sqlite")
+        store = OldStore(self.tmp / "hls.sqlite")
         store.replace_month("S30", "2025-08", [
             {"id": "HLS.S30.T15TVH.2025220T170000.v2.0", "tile": "T15TVH", "date": "2025-08-08", "time": "2025-08-08T17:00:00Z", "sensor": "S30", "cloud": 5},
         ], "2025-09-05T00:00:00+00:00")

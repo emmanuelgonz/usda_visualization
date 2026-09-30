@@ -1410,4 +1410,25 @@ Message: `Retire the HLS store module`.
 
 ## Appendix: migration proof
 
-Filled in by the executor after Task 5 step 1: the old-versus-new count comparison on the real data, with the ranges, the totals, and any tile whose counts differ and why.
+Old store (`data/hls/hls.sqlite`, through `viz.hls.Store`) against the catalog (`data/catalog/conus.sqlite`, through `tiled.counts`), read-only, run 2026-09-30 before `viz/hls.py` was deleted:
+
+```
+filters: [('cloud', 'max', 30), ('sensor', 'choice', 'ALL')]
+
+2025-07-15..2025-07-31 cloud 30 sensor ALL
+  tiles old=1174 new=1174 differing=0
+  sum old=7007 new=7007
+
+2025-03-01..2025-05-31 cloud 30 sensor S30
+  tiles old=1222 new=1222 differing=0
+  sum old=21719 new=21719
+
+2024-01-01..2024-12-31 cloud 100 sensor ALL
+  tiles old=1223 new=1223 differing=0
+  sum old=256759 new=256759
+
+old summary(): {'count': 1271419, 'fetched': '2026-09-25T20:43:13+00:00', 'tiles': 1223}
+catalog summary('hls'): {'count': 1275593, 'fetched': '2026-09-30T20:48:57+00:00', 'months': 57}
+```
+
+All three ranges match tile for tile. The totals differ by 4,174 granules (1,275,593 against 1,271,419) because the September 2026 refresh added rows to the catalog after the migrate; none of those rows fall in the three compared ranges.

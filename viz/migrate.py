@@ -83,7 +83,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Import the old HLS store and footprint files into the catalog.")
     parser.add_argument("--registry", default=str(paths.MISSIONS))
     parser.add_argument("--catalog")
-    parser.add_argument("--hls", default=str(paths.HLS_DB))
+    parser.add_argument("--hls", default=str(paths.DATA / "hls" / "hls.sqlite"))
     parser.add_argument("--emit", default=str(paths.EMIT_FOOTPRINTS))
     parser.add_argument("--eco", default=str(paths.ECO_FOOTPRINTS))
     args = parser.parse_args(argv)
