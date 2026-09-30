@@ -11,6 +11,8 @@ import os
 import threading
 from pathlib import Path
 
+from viz.spatial import point_in_ring  # noqa: F401  (re-exported; the index below and viz.hls use it)
+
 
 def week_sunday(year, week):
     """The Sunday ending CPC week N of a year.
@@ -20,21 +22,6 @@ def week_sunday(year, week):
     is the timestamp on cornCond24w15.tif in the archive.
     """
     return datetime.date.fromisocalendar(year, week, 7)
-
-
-def point_in_ring(lon, lat, ring):
-    """Ray-casting containment for a lon/lat ring, closed or not."""
-    inside = False
-    n = len(ring)
-    j = n - 1
-    for i in range(n):
-        xi, yi = ring[i]
-        xj, yj = ring[j]
-        crosses = (yi > lat) != (yj > lat)
-        if crosses and lon < (xj - xi) * (lat - yi) / (yj - yi) + xi:
-            inside = not inside
-        j = i
-    return inside
 
 
 class FootprintIndex:
