@@ -80,7 +80,7 @@ class TestRefresh(unittest.TestCase):
                           "links": {}, "style": {}}]}))
         pages = {1: [POLY], 2: []}
         with unittest.mock.patch("viz.months.current_month", return_value="2025-07"), \
-             unittest.mock.patch("viz.cmr.fetch_page", side_effect=lambda url: pages[int(url.rsplit("page_num=", 1)[1])]), \
+             unittest.mock.patch("viz.cmr.fetch_response", side_effect=lambda url: (json.dumps({"feed": {"entry": pages[int(url.rsplit("page_num=", 1)[1])]}}).encode(), {"CMR-Hits": "1"})), \
              unittest.mock.patch("sys.stdout", self.out):
             code = refresh.main(["emit", "--registry", str(reg_path), "--catalog", str(self.tmp / "r.sqlite")])
         self.assertEqual(code, 0)

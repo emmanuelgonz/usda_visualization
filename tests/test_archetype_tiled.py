@@ -1,7 +1,4 @@
-import json
-import tempfile
 import unittest
-from pathlib import Path
 
 from viz import archetypes, cmr, registry
 from viz.archetypes import tiled

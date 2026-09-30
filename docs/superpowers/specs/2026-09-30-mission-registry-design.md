@@ -124,8 +124,9 @@ granules not yet covered. Progress is printed per mission and month; a failed mo
 previous month's rows in place.
 
 `./run.sh migrate` imports the existing stores once: `data/hls/hls.sqlite` (rows and tile rings),
-`data/emit/footprints.geojson`, and `data/eco/footprints.geojson`, into the catalog, marking their
-months fetched at the import time so the next refresh touches only recent months. The old files
+`data/emit/footprints.geojson`, and `data/eco/footprints.geojson`, into the catalog, stamping the
+footprint files' months with the file's modification time and the HLS months with the earliest
+sensor fetch time, so a month whose data may be incomplete is refetched. The old files
 are left in place until the sweep step deletes their readers.
 
 The commands `hls`, `footprints`, and `emit` in `run.sh` become aliases of `refresh` during the

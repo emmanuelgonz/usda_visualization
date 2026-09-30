@@ -1,7 +1,7 @@
+import json
 import shutil
 import sqlite3
 import tempfile
-import threading
 import unittest
 from pathlib import Path
 
@@ -68,6 +68,17 @@ class TestCatalog(unittest.TestCase):
     def test_extra_attributes_go_to_attrs_json(self):
         self.cat.replace_month("sw", "2025-07", [swath_row("a", "2025-07-02T10:00:00Z", attrs={"swir": 1})], "x")
         self.assertEqual(self.cat.conn.execute("SELECT attrs FROM granules").fetchone()[0], '{"swir": 1}')
+
+    def test_undeclared_keys_and_explicit_attrs_merge_into_attrs(self):
+        self.cat.replace_month("sw", "2025-07", [swath_row("a", "2025-07-02T10:00:00Z", swir=3, attrs={"x": 1})], "x")
+        stored = self.cat.conn.execute("SELECT attrs FROM granules").fetchone()[0]
+        self.assertEqual(json.loads(stored), {"x": 1, "swir": 3})
+
+    def test_replace_month_removes_coverage_of_vanished_granules(self):
+        self.cat.replace_month("sw", "2025-07", [swath_row("a", "2025-07-02T10:00:00Z"), swath_row("b", "2025-07-03T10:00:00Z")], "x")
+        self.cat.put_coverage([("sw", "a", "mgrs", "T1"), ("sw", "b", "mgrs", "T1")])
+        self.cat.replace_month("sw", "2025-07", [swath_row("b", "2025-07-03T10:00:00Z")], "y")
+        self.assertEqual([r[0] for r in self.cat.conn.execute("SELECT id FROM coverage")], [])
 
     def test_tiles_and_coverage(self):
         self.cat.replace_month("ti", "2025-07", [tiled_row("t1", "2025-07-05T00:00:00Z", "T15TVH", 10, "A"),

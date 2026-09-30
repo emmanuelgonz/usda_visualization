@@ -98,6 +98,24 @@ class TestValidation(unittest.TestCase):
         with self.assertRaisesRegex(registry.RegistryError, "footprint"):
             self.load(lambda d: d["missions"][0].pop("footprint"))
 
+    def test_sibling_id_pattern_needs_enough_groups(self):
+        sibling = {"source": "sibling", "short_name": "X", "version": "1", "id_pattern": "^(\\d+)_",
+                   "sibling_pattern": "{0}_{1}_*", "kinds": {}}
+        with self.assertRaisesRegex(registry.RegistryError, "sw.*capture group"):
+            self.load(lambda d: d["missions"][0].update(browse=sibling))
+        sibling["id_pattern"] = "^(\\d+)_(\\d+)"
+        self.load(lambda d: d["missions"][0].update(browse=sibling))
+
+    def test_missing_fields_raise_registry_errors(self):
+        with self.assertRaisesRegex(registry.RegistryError, "sw.*short_name"):
+            self.load(lambda d: d["missions"][0]["cmr"][0].pop("short_name"))
+        with self.assertRaisesRegex(registry.RegistryError, "sw.*version"):
+            self.load(lambda d: d["missions"][0]["cmr"][0].pop("version"))
+        with self.assertRaisesRegex(registry.RegistryError, "sw.*cloud.*from"):
+            self.load(lambda d: d["missions"][0]["attributes"]["cloud"].pop("from"))
+        with self.assertRaisesRegex(registry.RegistryError, "region.*bbox"):
+            self.load(lambda d: d["region"].update(bbox=[-100, 40, "x", 41]))
+
     def test_choice_default_must_be_a_value(self):
         with self.assertRaisesRegex(registry.RegistryError, "default"):
             self.load(lambda d: d["missions"][1]["filters"][0].update(default="Z"))

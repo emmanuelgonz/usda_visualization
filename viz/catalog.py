@@ -63,9 +63,13 @@ CREATE TABLE IF NOT EXISTS months (
 
 
 def _values(mission, row):
+    attrs = dict(row.get("attrs") or {})
+    attrs.update({k: v for k, v in row.items() if k not in _ROW_COLUMNS and k != "mission"})
     out = [mission]
     for column in _ROW_COLUMNS:
         value = row.get(column)
+        if column == "attrs":
+            value = attrs or None
         if column in ("ring", "attrs") and value is not None:
             value = json.dumps(value)
         out.append(value)
@@ -107,6 +111,9 @@ class Catalog:
         start, end = month_bounds(month)
         marks = ",".join("?" * (len(_ROW_COLUMNS) + 1))
         with self.conn:
+            self.conn.execute("DELETE FROM coverage WHERE mission = ? AND id IN "
+                              "(SELECT id FROM granules WHERE mission = ? AND start >= ? AND start < ?)",
+                              (mission, mission, start, end))
             self.conn.execute("DELETE FROM granules WHERE mission = ? AND start >= ? AND start < ?",
                               (mission, start, end))
             self.conn.executemany(

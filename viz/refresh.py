@@ -17,11 +17,11 @@ def refresh_mission(cat, reg, mission, first=None, fetch_csv=None, fetch_json=No
     """Fetch the mission's non-frozen months into the catalog; returns counts.
 
     The fetchers default to the cmr module's functions at call time, so a test
-    can patch viz.cmr.fetch_page and viz.cmr.fetch_response.
+    can patch viz.cmr.fetch_response.
     """
     out = out or sys.stdout
     fetch_csv = fetch_csv or cmr.fetch_response
-    fetch_json = fetch_json or cmr.fetch_page
+    fetch_json = fetch_json or cmr.fetch_response
     archetype = archetypes.get(mission.archetype)
     counts = {"months": 0, "granules": 0}
     for month in months.months_between(first or mission.since, months.current_month()):

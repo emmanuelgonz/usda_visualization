@@ -5,10 +5,13 @@ Coverage against each tiled grid is computed once per granule so that
 coincidence with a tiled partner is a join on tile and date.
 """
 
+import json
 import re
 
 from viz import cmr, spatial
 from viz.months import month_bounds
+
+COVERAGE_FLUSH = 50000
 
 
 def page_url(collection, bbox, month, page_num):
@@ -83,16 +86,28 @@ def entry_to_row(mission, collection, entry):
     return row
 
 
-def fetch_month(mission, collection, bbox, month, fetch_fn=cmr.fetch_page):
-    """Every row of one collection-month, paging until an empty page, limited to the month's dates."""
-    rows = []
-    page = 1
-    while True:
-        entries = fetch_fn(page_url(collection, bbox, month, page))
-        if not entries:
-            break
-        rows.extend(r for r in (entry_to_row(mission, collection, e) for e in entries) if r is not None)
-        page += 1
+def fetch_month(mission, collection, bbox, month, fetch_fn=None):
+    """Every row of one collection-month, paged by CMR-Hits, limited to the month's dates.
+
+    Raises ValueError without a usable CMR-Hits header, or when the pages
+    deliver fewer entries than CMR-Hits promised, so a short page is never
+    recorded as a completed fetch and frozen.
+    """
+    fetch_fn = fetch_fn or cmr.fetch_response
+    url = page_url(collection, bbox, month, 1)
+    body, headers = fetch_fn(url)
+    try:
+        hits = int(headers.get("CMR-Hits"))
+    except (TypeError, ValueError):
+        raise ValueError(f"no CMR-Hits header in the response for {url}") from None
+    entries = json.loads(body)["feed"]["entry"]
+    pages = -(-hits // cmr.PAGE_SIZE)
+    for page in range(2, pages + 1):
+        body, _ = fetch_fn(page_url(collection, bbox, month, page))
+        entries.extend(json.loads(body)["feed"]["entry"])
+    if len(entries) < hits:
+        raise ValueError(f"{collection.short_name} {month}: CMR reported {hits} granules but delivered {len(entries)}")
+    rows = [r for r in (entry_to_row(mission, collection, e) for e in entries) if r is not None]
     start, end = month_bounds(month)
     return [r for r in rows if start <= r["start"][:10] < end]
 
@@ -104,9 +119,14 @@ def compute_coverage(cat, mission, grid):
         return 0
     index = spatial.RingIndex((ring, (tile, ring)) for tile, ring in tiles)
     rows = []
+    written = 0
     for gid, box, ring in cat.uncovered(mission.key, grid):
         for tile, tile_ring in index.intersecting(box):
             if spatial.rings_intersect(ring, tile_ring):
                 rows.append((mission.key, gid, grid, tile))
+        if len(rows) >= COVERAGE_FLUSH:
+            cat.put_coverage(rows)
+            written += len(rows)
+            rows = []
     cat.put_coverage(rows)
-    return len(rows)
+    return written + len(rows)

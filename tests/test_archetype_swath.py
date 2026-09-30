@@ -1,3 +1,4 @@
+import json
 import shutil
 import tempfile
 import unittest
@@ -57,23 +58,52 @@ class TestEntries(unittest.TestCase):
         self.assertEqual(swath.entry_to_row(EMIT, EMIT.cmr[0], unclosed)["ring"][-1], [-100, 40])
 
 
+def page_of(entries, hits):
+    return json.dumps({"feed": {"entry": entries}}).encode(), {"CMR-Hits": str(hits)}
+
+
 class TestFetchMonth(unittest.TestCase):
-    def test_pages_until_empty_and_filters_to_the_month(self):
-        pages = {1: [POLY, dict(POLY, title="EMIT_2", time_start="2025-08-01T00:00:00Z")], 2: []}
+    def test_pages_by_hits_and_filters_to_the_month(self):
+        first = [POLY, dict(POLY, title="EMIT_2", time_start="2025-08-01T00:00:00Z")]
         asked = []
 
         def fake(url):
-            page = int(url.rsplit("page_num=", 1)[1])
             asked.append(url)
-            return pages[page]
+            return page_of(first, 2)
 
         rows = swath.fetch_month(EMIT, EMIT.cmr[0], BBOX, "2025-07", fetch_fn=fake)
         self.assertEqual([r["id"] for r in rows], ["EMIT_1"])
-        self.assertEqual(len(asked), 2)
+        self.assertEqual(len(asked), 1)
         self.assertIn("temporal=2025-07-01T00:00:00Z,2025-08-01T00:00:00Z", asked[0])
         self.assertIn("short_name=EMITL2ARFL", asked[0])
         self.assertIn("version=001", asked[0])
         self.assertIn("bounding_box=-125.0,24.4,-66.9,49.4", asked[0])
+
+    def test_missing_hits_header_raises(self):
+        with self.assertRaisesRegex(ValueError, "no CMR-Hits header"):
+            swath.fetch_month(EMIT, EMIT.cmr[0], BBOX, "2025-07",
+                              fetch_fn=lambda url: (json.dumps({"feed": {"entry": [POLY]}}).encode(), {}))
+
+    def test_short_delivery_raises(self):
+        with self.assertRaisesRegex(ValueError, "reported 3 granules but delivered 1"):
+            swath.fetch_month(EMIT, EMIT.cmr[0], BBOX, "2025-07", fetch_fn=lambda url: page_of([POLY], 3))
+
+    def test_extra_links_reach_the_catalog_attrs(self):
+        reg = registry.parse({"region": {"name": "T", "bbox": list(BBOX)}, "missions": [
+            {"key": "lk", "name": "L", "label": "L", "archetype": "swath", "footprint": "polygon",
+             "cmr": [{"short_name": "EMITL2ARFL", "version": "001"}], "since": "2022-08", "attributes": {},
+             "filters": [], "browse": {"source": "links", "match": "\\.png$"},
+             "links": {"quicklook": {"rel": "browse#", "match": "\\.png$"}}, "style": {}}]})
+        mission = reg.mission("lk")
+        tmp = Path(tempfile.mkdtemp())
+        cat = catalog.Catalog(tmp / "c.sqlite")
+        try:
+            cat.replace_month("lk", "2025-07", [swath.entry_to_row(mission, mission.cmr[0], POLY)], "x")
+            attrs = json.loads(cat.conn.execute("SELECT attrs FROM granules").fetchone()[0])
+            self.assertEqual(attrs, {"quicklook": "https://x/EMIT_1.png"})
+        finally:
+            cat.close()
+            shutil.rmtree(tmp)
 
 
 class TestCoverage(unittest.TestCase):

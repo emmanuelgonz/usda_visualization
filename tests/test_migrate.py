@@ -1,5 +1,6 @@
 import io
 import json
+import os
 import shutil
 import tempfile
 import unittest
@@ -53,17 +54,28 @@ class TestMigrate(unittest.TestCase):
         self.assertEqual([(r["sensor"], r["cloud"]) for r in rows], [("L30", 50.0), ("S30", 10.0), ("S30", None)])
         self.assertEqual(rows[0]["start"], "2025-07-17T17:00:00Z")
         month = self.cat.conn.execute("SELECT count, fetched_at FROM months WHERE mission='hls'").fetchone()
-        self.assertEqual((month["count"], month["fetched_at"]), (3, "2025-08-02T00:00:00+00:00"))
+        self.assertEqual((month["count"], month["fetched_at"]), (3, "2025-08-01T00:00:00+00:00"))
         self.assertEqual(self.cat.known_tiles("mgrs"), {"T15TVH"})
 
+    def test_import_hls_stamps_a_month_missing_a_sensor_with_its_end_date(self):
+        store = hls.Store(self.tmp / "hls.sqlite")
+        store.replace_month("S30", "2025-08", [
+            {"id": "HLS.S30.T15TVH.2025220T170000.v2.0", "tile": "T15TVH", "date": "2025-08-08", "time": "2025-08-08T17:00:00Z", "sensor": "S30", "cloud": 5},
+        ], "2025-09-05T00:00:00+00:00")
+        store.close()
+        migrate.import_hls(self.cat, self.tmp / "hls.sqlite", now=NOW, out=self.out)
+        self.assertEqual(self.cat.fetched_at("hls", "2025-08"), "2025-09-01T00:00:00+00:00")
+        self.assertEqual(self.cat.fetched_at("hls", "2025-07"), "2025-08-01T00:00:00+00:00")
+
     def test_import_footprints_drops_baked_pairing_and_records_months(self):
-        counts = migrate.import_footprints(self.cat, self.tmp / "emit.geojson", self.reg.mission("emit"), now=NOW, out=self.out)
+        os.utime(self.tmp / "emit.geojson", (1750000000, 1750000000))
+        counts = migrate.import_footprints(self.cat, self.tmp / "emit.geojson", self.reg.mission("emit"), out=self.out)
         self.assertEqual(counts, {"granules": 1, "months": 1})
         row = self.cat.conn.execute("SELECT * FROM granules WHERE mission='emit'").fetchone()
         self.assertEqual((row["cloud"], row["browse"], row["data"], row["attrs"]), (12.0, "https://x/EMIT_1.png", "https://x/EMIT_1.nc", None))
         self.assertEqual((row["minlon"], row["maxlat"]), (-94.0, 42.5))
-        self.assertEqual(self.cat.fetched_at("emit", "2025-07"), NOW())
-        counts = migrate.import_footprints(self.cat, self.tmp / "eco.geojson", self.reg.mission("eco"), now=NOW, out=self.out)
+        self.assertEqual(self.cat.fetched_at("emit", "2025-07"), "2025-06-15T15:06:40+00:00")
+        counts = migrate.import_footprints(self.cat, self.tmp / "eco.geojson", self.reg.mission("eco"), out=self.out)
         row = self.cat.conn.execute("SELECT daynight, orbit FROM granules WHERE mission='eco'").fetchone()
         self.assertEqual((row["daynight"], row["orbit"]), ("DAY", 39607))
 

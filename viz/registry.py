@@ -117,6 +117,9 @@ def _mission(entry):
     since = entry.get("since", "")
     if not _MONTH_RE.match(since):
         _fail(key, f"since must be YYYY-MM, got {since!r}")
+    for c in entry.get("cmr", []):
+        if not c.get("short_name") or c.get("version") in (None, ""):
+            _fail(key, "each cmr collection needs a short_name and a version")
     collections = tuple(Collection(c["short_name"], str(c["version"]), dict(c.get("implies", {})))
                         for c in entry.get("cmr", []))
     if not collections:
@@ -125,6 +128,8 @@ def _mission(entry):
     for name, spec in entry.get("attributes", {}).items():
         if spec.get("type") not in ATTRIBUTE_TYPES:
             _fail(key, f"attribute {name!r} has unknown type {spec.get('type')!r}")
+        if not spec.get("from"):
+            _fail(key, f"attribute {name!r} needs a 'from'")
         attributes[name] = Attribute(spec["from"], spec["type"])
     filters = []
     for spec in entry.get("filters", []):
@@ -145,7 +150,10 @@ def _mission(entry):
         for name in ("short_name", "version", "id_pattern", "sibling_pattern", "kinds"):
             if name not in browse:
                 _fail(key, f"sibling browse needs {name!r}")
-        _compile(key, "browse id", browse["id_pattern"])
+        id_re = _compile(key, "browse id", browse["id_pattern"])
+        needed = len(set(re.findall(r"\{(\d+)\}", browse["sibling_pattern"])))
+        if id_re.groups < needed:
+            _fail(key, f"browse id pattern has {id_re.groups} capture group(s) but sibling_pattern uses {needed}")
     for name, spec in entry.get("links", {}).items():
         _compile(key, f"link {name!r} match", spec.get("match", ""))
     footprint = grid = tile_from = None
@@ -172,6 +180,10 @@ def parse(data):
     bbox = region.get("bbox")
     if not region.get("name") or not isinstance(bbox, list) or len(bbox) != 4:
         raise RegistryError("region needs a name and a four-number bbox")
+    try:
+        box = tuple(float(v) for v in bbox)
+    except (TypeError, ValueError):
+        raise RegistryError("region bbox must hold four numbers") from None
     missions = []
     seen = set()
     for entry in data.get("missions", []):
@@ -180,7 +192,7 @@ def parse(data):
             _fail(mission.key, "duplicate key")
         seen.add(mission.key)
         missions.append(mission)
-    return Registry(Region(region["name"], tuple(float(v) for v in bbox)), missions)
+    return Registry(Region(region["name"], box), missions)
 
 
 def load(path=paths.MISSIONS):
